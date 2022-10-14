@@ -1,0 +1,7 @@
+packages:
+  hdl/heron.cabal
+  flite/flite.cabal
+
+tests: True
+
+write-ghc-environment-files: always

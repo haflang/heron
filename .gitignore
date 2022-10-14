@@ -1,0 +1,16 @@
+.vscode
+result
+src/*.o
+src/*.hi
+src/*.dyn_hi
+src/*.dyn_o
+src/*/*.o
+src/*/*.hi
+src/*/*.dyn_hi
+src/*/*.dyn_o
+.ghc.environment.*
+dist-newstyle/
+vhdl
+verilog
+systemverilog
+archive

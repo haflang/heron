@@ -1,0 +1,175 @@
+cabal-version:       2.4
+name:                heron
+version:             0.1
+license:             BSD-2-Clause
+author:              Craig Ramsay <craig.ramsay@hw.ac.uk>
+maintainer:          Craig Ramsay <craig.ramsay@hw.ac.uk>
+
+common common-options
+  default-extensions:
+    BangPatterns
+    BinaryLiterals
+    ConstraintKinds
+    DataKinds
+    DefaultSignatures
+    DeriveAnyClass
+    DeriveDataTypeable
+    DeriveFoldable
+    DeriveFunctor
+    DeriveGeneric
+    DeriveLift
+    DeriveTraversable
+    DerivingStrategies
+    InstanceSigs
+    KindSignatures
+    LambdaCase
+    NoStarIsType
+    PolyKinds
+    RankNTypes
+    ScopedTypeVariables
+    StandaloneDeriving
+    TupleSections
+    TypeApplications
+    TypeFamilies
+    TypeOperators
+    ViewPatterns
+
+    -- TemplateHaskell is used to support convenience functions such as
+    -- 'listToVecTH' and 'bLit'.
+    TemplateHaskell
+    QuasiQuotes
+
+    -- Prelude isn't imported by default as Clash offers Clash.Prelude
+    NoImplicitPrelude
+  ghc-options:
+    -Wall -Wcompat
+    -haddock
+
+    -- Plugins to support type-level constraint solving on naturals
+    -fplugin GHC.TypeLits.Extra.Solver
+    -fplugin GHC.TypeLits.Normalise
+    -fplugin GHC.TypeLits.KnownNat.Solver
+
+    -- Clash needs access to the source code in compiled modules
+    -fexpose-all-unfoldings
+
+    -- Worker wrappers introduce unstable names for functions that might have
+    -- blackboxes attached for them. You can disable this, but be sure to add
+    -- a no-specialize pragma to every function with a blackbox.
+    -fno-worker-wrapper
+  build-depends:
+    base,
+    Cabal >= 2.4,
+
+    -- clash-prelude will set suitable version bounds for the plugins
+    clash-prelude >= 1.6.4 && < 1.8,
+    retroclash-lib,
+    ghc-typelits-natnormalise,
+    ghc-typelits-extra,
+    ghc-typelits-knownnat,
+    process,
+    flite == 0.6.2
+
+custom-setup
+  setup-depends:
+    base          >= 4.11 && <5,
+    Cabal         >= 2.4
+
+library
+  import: common-options
+  hs-source-dirs: src
+  exposed-modules:
+    Heron
+    Heron.Template
+    Heron.Encode
+    Heron.External
+    Heron.Semantics
+    Heron.Core.ParStack
+    Heron.Core.Stack
+    Heron.Core.Heap
+    Heron.Core.Rom
+    Heron.Core.Core
+    Heron.Core.Types
+    Heron.Core.Board
+    Heron.Core.Alu
+    Heron.Xilinx.ClockDiv
+    Heron.Xilinx.DistributedRam
+    Heron.Xilinx.DualPortRam
+  other-modules:
+    Heron.TemplateTH
+  default-language: Haskell2010
+  ghc-options: -cpp
+               -D__CoreMixed__
+               -D__ClkT__=5319
+               -D__MaxAps__=2
+               -D__MaxPush__=6
+               -D__NodeLen__=4
+               -D__MaxRegs__=2
+               -D__VStkSize__=8192
+               -D__AStkSize__=4096
+               -D__UStkSize__=4096
+               -D__HeapSize__=32768
+               -D__RomSize__=1024
+               -D__TagW__=10
+               -D__IntW__=15
+               -D__ShortIntW__=6
+               -D__ShortTagW__=2
+               -D__MaxArgs__=7
+               -fconstraint-solver-iterations=1000
+  build-depends:
+    template-haskell,
+    vector,
+    containers,
+    mtl,
+    primitive,
+    barbies,
+    barbies-th,
+    lens,
+    temporary,
+    interpolate,
+    clash-ghc
+
+executable heron
+  import: common-options
+  main-is: bin/Main.hs
+  default-language: Haskell2010
+  ghc-options: -fconstraint-solver-iterations=1000
+  build-depends: clash-ghc, heron
+
+test-suite doctests
+  import:           common-options
+  type:             exitcode-stdio-1.0
+  default-language: Haskell2010
+  main-is:          doctests.hs
+  hs-source-dirs:   tests
+
+  build-depends:
+    base,
+    heron
+
+test-suite test-library
+  import: common-options
+  default-language: Haskell2010
+  hs-source-dirs: tests
+  type: exitcode-stdio-1.0
+  ghc-options: -threaded
+  main-is: unittests.hs
+  exposed-modules:
+    Heron.Tests.Template
+    Heron.Tests.Core.ParStack
+    Heron.Tests.Core.Stack
+    Heron.Tests.Core.Heap
+    Heron.Tests.Core.Rom
+    Heron.Tests.Core.Board
+  build-depends:
+    heron,
+    QuickCheck,
+    hedgehog,
+    hedgehog,
+    tasty >= 1.2 && < 1.5,
+    tasty-hedgehog,
+    tasty-th,
+    clash-prelude-hedgehog,
+    temporary,
+    directory,
+    process
