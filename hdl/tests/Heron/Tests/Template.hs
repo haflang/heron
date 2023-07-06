@@ -47,11 +47,25 @@ genAtom = Gen.choice
   , Reg       <$> ge <*> ge
   ]
 
+genAlt :: H.Gen Alt
+genAlt = Gen.choice
+  [ AFun <$> ge
+  , AInt <$> ge <*> ge
+  , ACon <$> ge <*> ge <*> ge
+  , AArg <$> ge <*> ge
+  ]
+
+genCaseTable :: H.Gen (CaseTable Alt)
+genCaseTable = Gen.choice
+  [ CTInline <$> genAlt <*> genAlt
+  , CTOffset <$> ge
+  ]
+
 genNode :: (KnownNat a, KnownNat b) => H.Gen (Node a b)
 genNode = Gen.choice
-  [ Case <$> ge <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
-  , App  <$> ge <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
-  , Prim <$> ge <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
+  [ Case <$> genCaseTable <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
+  , App  <$> ge           <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
+  , Prim <$> ge           <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
   ]
 
 genTemplate :: H.Gen Template
@@ -82,11 +96,14 @@ checkBitRep gen = H.withTests 10000 $ H.property $ do
   op <- H.forAll gen
   op === (C.unpack $ C.pack op)
 
-prop_PackOpCode, prop_PackPhase, prop_PackAtom, prop_PackNode, prop_PackTemplate
+prop_PackOpCode, prop_PackPhase, prop_PackAtom, prop_PackAlt,
+  prop_PackCaseTable, prop_PackNode, prop_PackTemplate
   :: H.Property
 prop_PackOpCode    = checkBitRep genOpCode
 prop_PackPhase     = checkBitRep genPhase
 prop_PackAtom      = checkBitRep genAtom
+prop_PackAlt       = checkBitRep genAlt
+prop_PackCaseTable = checkBitRep genCaseTable
 prop_PackNode      = checkBitRep (genNode @4 @3)
 prop_PackTemplate  = checkBitRep genTemplate
 

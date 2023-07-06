@@ -16,6 +16,12 @@ instance Show Decl where
                            ++ show rhs ++ ";\n"
   show (Other str) = str ++ ";\n"
 
+instance Show AltsTab where
+  show (AFuns   fs) = "[Funs : " ++ consperse "," fs ++ "]"
+  show (AInline as) = "[Alts : " ++ consperse ";" (map showAlt as) ++ "]"
+    where
+      showAlt (args, e) = consperse "," args ++ " -> " ++ show e
+
 instance Show Exp where
   show (App e es) = consperse " " (showArg e : map showArg es)
   show (PrimApp p es) = "{" ++ show (App (Prim p) es) ++ "}"
@@ -26,7 +32,7 @@ instance Show Exp where
   show (Prim f) = f
   show (Con c) = c
   show (Int i) = show i
-  show (Alts as i) = "[" ++ consperse "," as ++ "]"
+  show (Alts as i) = show as
   show Bottom = "_|_"
   show (Ctr c arity i) = c
   show (Lam vs e) = '\\' : consperse " " vs ++ " -> " ++ show e

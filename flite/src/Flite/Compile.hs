@@ -80,7 +80,7 @@ trDefn n m nregs p (f, args, xs)
     (spine, body, ls) = splitSpine m xs
     body' = predexReorder nregs $ splitApps n body
     d = (f, args, spine, body')
-    luts = map (indexOf p) $ map getAlts ls
+    luts = map (trAlt p d . getAlts) ls
     apps = map (trApp p d . snd) body'
     pushs = map (tr p d) $ filter (not . isAlts) spine
     (pushs', apps') = predex nregs (pushs, apps)
@@ -91,7 +91,7 @@ trApp p d app
   | otherwise = R.CASE (head luts) rest
   where
     app' = rearrange app
-    luts = map (indexOf p) $ map getAlts $ filter isAlts app'
+    luts = map (trAlt p d . getAlts) $ filter isAlts app
     rest = map (tr p d) $ filter (not . isAlts) app'
 
 rearrange (Prim p:x:y:rest) = x:Prim p:y:rest
@@ -125,6 +125,16 @@ tr p (f, args, spine, body) (Var v) =
             i:_ -> i
 tr p d (Ctr c n i) = R.CON n i
 tr p d Bottom = R.CON 0 66 -- This should never happen
+
+trAlt p d (AFuns fs) = R.LOffset $ indexOf p (head fs)
+trAlt p d (AInline as) = R.LInline $ map go as
+  where
+    go (args, Var v)
+      = case v `elemIndex` args of
+          Just i -> (length args, R.ARG False i)
+          Nothing -> error "Flite.Compile.trLut: Inlining heap reference to alt"
+    go (args, e) = (length args, tr p d e)
+
 
 -- Set boolean 'original' flag on funtions; if true, function was
 -- originally defined, and if false, function was introduced in
@@ -224,10 +234,8 @@ isAlts :: Exp -> Bool
 isAlts (Alts fs n) = True
 isAlts e = False
 
-getAlts :: Exp -> Id
-getAlts (Alts fs n)
-  | null fs = error "RedCompile: getAlts"
-  | otherwise = head fs
+getAlts :: Exp -> AltsTab
+getAlts (Alts tab _) = tab
 
 lift f p = xs ++ ys
   where (xs, ys) = partition (\(g, _, _) -> f == g) p

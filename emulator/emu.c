@@ -81,7 +81,9 @@ typedef union
 
 typedef struct { AtomTag tag; AtomContents contents; } Atom;
 
-typedef Int Lut;
+typedef enum { LUTLAM, LUTFUN } LutType;
+typedef struct { Int pops; Atom a; } Alt;
+typedef struct { LutType ty; Int addr; Alt alts[2]; } Lut;
 
 typedef enum { AP, CASE, PRIM, COLLECTED, INVALID } AppTag;
 
@@ -233,11 +235,24 @@ void showAtom(Atom a)
     }
 }
 
+void showAlt(Lut l)
+{
+  if (l.ty == LUTFUN)
+    printf ("CASE F%d ", l.addr);
+  else{
+    printf ("CASE A(%d -> ", l.alts[0].pops);
+    showAtom(l.alts[0].a);
+    printf (", %d -> ", l.alts[1].pops);
+    showAtom(l.alts[1].a);
+    printf (" ");
+  }
+}
+
 void showApp2(App app)
 {
   switch (app.tag) {
   case AP: break;
-  case CASE: printf("CASE F%d ", app.details.lut); break;
+  case CASE: showAlt(app.details.lut); break;
   case PRIM: printf("r%d=", app.details.regId); break;
   case COLLECTED:printf("COLLECTED"); return;
   case INVALID: printf("INVALID"); return;
@@ -260,7 +275,7 @@ void showApp(int addr)
 
     switch (app.tag) {
     case AP: break;
-    case CASE: printf("CASE F%d ", app.details.lut); break;
+    case CASE: showAlt(app.details.lut); break;
     case PRIM: printf("r%d=", app.details.regId); break;
     case COLLECTED:printf("COLLECTED"); return;
     case INVALID: printf("INVALID"); return;
@@ -849,17 +864,34 @@ void caseSelect(Int index)
 {
   Lut lut = lstack[lsp-1];
   Template tmpl;
-  stack[sp-1].tag = FUN;
-  stack[sp-1].contents.fun.original = 1;
-  stack[sp-1].contents.fun.arity = 0;
-  stack[sp-1].contents.fun.id = lut+index;
-  lsp--;
+  Alt b;
+  Int taddr;
+  Bool isFun;
+  Int i;
 
   caseCount++;
-  applyCount++;
-  tmpl = tcachedRead(lut+index);
-  profTable[lut+index].callCount++;
-  apply(&tmpl);
+  lsp--;
+
+  b = lut.alts[index];
+  isFun = lut.ty == LUTFUN || (lut.ty == LUTLAM && b.a.tag == FUN);
+  taddr = lut.ty == LUTFUN ? lut.addr+index : b.a.contents.fun.id;
+
+  if (isFun) {
+    stack[sp-1].tag = FUN;
+    stack[sp-1].contents.fun.original = 1;
+    stack[sp-1].contents.fun.arity = 0;
+    stack[sp-1].contents.fun.id = taddr;
+    applyCount++;
+    tmpl = tcachedRead(taddr);
+    profTable[taddr].callCount++;
+    apply(&tmpl);
+  } else {
+    inlineAltCount++;
+    for (i=0; i<MAXPUSH; i++)
+      frozen_stack[i] = stack[sp-2-i];
+    stack[sp-1-b.pops] = inst(0, b.a);
+    sp -= b.pops;
+  }
 }
 
 /* Garbage collection */
@@ -1013,7 +1045,7 @@ void init()
   stack[0] = mainAtom;
   swapCount = primCount = applyCount =
     unwindCount = updateCount = selectCount =
-      prsCandidateCount = prsSuccessCount = gcCount = caseCount = heapWaitCount = 0;
+      prsCandidateCount = prsSuccessCount = gcCount = caseCount = heapWaitCount = inlineAltCount = 0;
   initProfTable();
 }
 
@@ -1217,6 +1249,36 @@ Bool parseAtom(FILE *f, Atom* result)
 
 makeListParser(parseAtoms, parseAtom, Atom)
 
+Bool parseAlt(FILE *f, Alt *alt)
+{
+  if (fscanf(f, "(%d,", &alt->pops) == 1){
+    if (!parseAtom(f, &alt->a)) return 0;
+    if (fscanf(f, ")") != 0) return 0;
+    return 1;
+  }
+  return 0;
+}
+
+makeListParser(parseAlts, parseAlt, Alt)
+
+Bool parseLut(FILE *f, Lut *lut)
+{
+  Char c;
+  Int numLuts;
+  if (fscanf(f, " L") != 0) return 0;
+  if (fscanf(f, " Offset %i ", &lut->addr) == 1){
+    lut->ty = LUTFUN;
+    return 1;
+  } else if (fscanf(f, " Inlin%c ", &c) == 1 && c == 'e') {
+    lut->ty = LUTLAM;
+    numLuts = parseAlts(f, 2, lut->alts);
+    return numLuts > 0 && numLuts <= 2;
+  }
+  return 0;
+}
+
+makeListParser(parseLuts, parseLut, Lut)
+
 Bool parseApp(FILE *f, App *app)
 {
   Char str[16];
@@ -1226,12 +1288,14 @@ Bool parseApp(FILE *f, App *app)
     && perform(app->details.normalForm = strToBool(str))
     )
     ||
-    (  fscanf(f, " CASE %i ", &app->details.lut) == 1
-    && perform(app->tag = CASE)
-    )
-    ||
     (  fscanf(f, " PRIM %i ", &app->details.regId) == 1
     && perform(app->tag = PRIM)
+    )
+    ||
+    (  fscanf(f, " CAS%c (", str) == 1 && str[0] == 'E'
+    && perform(app->tag = CASE)
+    && parseLut(f, &app->details.lut)
+    && fscanf(f, " %c ", str) == 1 && str[0] == ')'
     );
 
   if (!success) return 0;
@@ -1240,14 +1304,6 @@ Bool parseApp(FILE *f, App *app)
 }
 
 makeListParser(parseApps, parseApp, App)
-
-Bool parseLut(FILE *f, Int *i)
-{
-  return fscanf(f, " %i", i) == 1;
-}
-
-makeListParser(parseLuts, parseLut, Lut)
-
 
 Bool parseString(FILE *f, Int n, Char *str)
 {
@@ -1362,7 +1418,7 @@ int main(int argc, char *argv[])
   init();
   dispatch();
 
-  ticks = swapCount + primCount + applyCount + unwindCount + updateCount + heapWaitCount;
+  ticks = swapCount + primCount + applyCount + unwindCount + updateCount + heapWaitCount + inlineAltCount;
   if (verbose) {
       printf("\n==== EXECUTION REPORT ====\n");
       printf("Result      = %12i\n", stack[0].contents.num);

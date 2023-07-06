@@ -88,10 +88,37 @@ encAtoms = toVec . map encAtom
 encAtomsDef :: forall n . C.KnownNat n => T.Atom -> [Atom] -> C.Vec n T.Atom
 encAtomsDef def = C.map (fromMaybe def) . encAtoms
 
-encCaseTable :: LUT -> T.CaseTable
-encCaseTable addr
-  | inRange @T.TemplAddr addr = fromIntegral addr
-  | otherwise = error $ "Encode.encCaseTable: Case table offset our of range: " ++ show addr
+encCaseTable :: LUT -> T.CaseTable T.Alt
+encCaseTable (LOffset addr)
+  | inRange @T.TemplAddr addr
+  = T.CTOffset (fromIntegral addr)
+  | otherwise
+  = error $ "Encode.encCaseTable: offset address too large"
+encCaseTable (LInline [altA])
+  = T.CTInline (encAlt altA) (encAlt $ (0, CON 0 0))
+encCaseTable (LInline [altA, altB])
+  = T.CTInline (encAlt altA) (encAlt altB)
+encCaseTable ct = error $ "Encode.encCaseTable: too many inline alternatives" ++ show ct
+
+encAlt :: (Int, Atom) -> T.Alt
+encAlt (p, INT val)
+  | inRange @T.FnArity p &&
+    inRange @T.ShortInt val
+  = T.AInt (fromIntegral p) (fromIntegral val)
+encAlt (p, ARG _ idx)
+  | inRange @T.FnArity p &&
+    inRange @T.ArgIndex idx
+  = T.AArg (fromIntegral p) (fromIntegral idx)
+encAlt (p, CON arity tag)
+  | inRange @T.FnArity p &&
+    inRange @T.FnArity arity &&
+    inRange @T.ShortTag tag
+  = T.ACon (fromIntegral p) (fromIntegral arity) (fromIntegral tag)
+encAlt (_, FUN _ _ addr)
+  | inRange @T.TemplAddr addr
+  = T.AFun (fromIntegral addr)
+encAlt a = error $ "Encode.encAlt: Invalid alt " ++ show a
+
 encApp :: forall n m . (C.KnownNat n, C.KnownNat m) => App -> T.Node n m
 encApp (APP isNF as)
   | length as <= maxWidth

@@ -12,6 +12,10 @@ data Decl = Func { funcName :: Id
 
 type Id = String
 
+data AltsTab = AFuns   [Id]          -- Compile to one template base address
+             | AInline [([Id], Exp)] -- Compile with inlined single atoms as
+  deriving Eq                        -- each alt
+
 data Exp = App Exp [Exp]
          | Case Exp [Alt]
          | Let [Binding] Exp
@@ -24,7 +28,7 @@ data Exp = App Exp [Exp]
            -- The following may be introduced by various transformations,
            -- but not by the parser.
          | Bottom
-         | Alts [Id] Int
+         | Alts AltsTab Int
          | Ctr Id Int Int
          | Lam [Id] Exp
 

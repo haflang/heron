@@ -80,7 +80,8 @@ calls e = extract calls e
 
 maybeCalls :: Exp -> [Id]
 maybeCalls (Fun f) = [f]
-maybeCalls (Alts fs  _) = fs
+maybeCalls (Alts (AFuns fs)   _) = fs
+maybeCalls (Alts (AInline as) _) = concatMap (maybeCalls . snd) as
 maybeCalls e = extract maybeCalls e
 
 lookupFuncs :: Id -> Prog -> [Decl]

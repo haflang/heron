@@ -63,11 +63,15 @@ module Heron.Template
   -- ** Atoms
   , Atom(..)
   -- ** Case handling
+  , Alt(..)
   , CaseTable(..)
 
   -- * Unpacked Representations
   , UnpackedNode(..)
   , unpackNode
+  , UnpackedAlt(..)
+  , unpackAlt
+  , unpackCaseTable
 
   -- * Helpers
   -- ** Booleans
@@ -83,6 +87,7 @@ module Heron.Template
   , atomArity
   , rawAdd
   , canGC
+  , altPushOffset
 
   -- ** Mutations
   , mapNode
@@ -220,12 +225,66 @@ data Atom
 -- TODO Try making the atom bit pack use one-hot _only_ on stack. Might speed up
 -- our control logic?
 
+-- | /Inline/ case alternatives
+data Alt
+  = AFun         TemplAddr
+  -- ^ Function pointer (arity can be inferred from the template)
+  | AInt FnArity ShortInt
+  -- ^ Integer literal
+  | ACon FnArity FnArity ShortTag
+  -- ^ Constructor tag
+  | AArg FnArity ArgIndex
+  -- ^ Argument pointer
+  deriving (Eq, Show, Generic, NFDataX, ShowX, Lift)
+
+-- TODO This should be generated with TH. Clash's derivePackedAnnotation sounds
+-- equivalent but it doesn't seem to work for me.
+{-# ANN module (
+      let { ta = snatToNum (SNat @(BitSize TemplAddr));
+            fa = snatToNum (SNat @(BitSize FnArity));
+            si = snatToNum (SNat @(BitSize ShortInt));
+            st = snatToNum (SNat @(BitSize ShortTag));
+            ai = snatToNum (SNat @(BitSize ArgIndex));
+            msb = pred . fromIntegral $ P.maximum $
+                   P.zipWith (+) [1..] $
+                   P.map P.sum [[ta],[fa, si],[fa, fa, st],[fa, ai]]
+      }
+      in DataReprAnn $(liftQ [t|Alt|]) (msb+1)
+           [ConstrRepr 'AFun (bitmask msb 1) (shiftL 1 (msb-0)) (fieldmasks [ta])
+           ,ConstrRepr 'AInt (bitmask msb 2) (shiftL 1 (msb-1)) (fieldmasks [fa, si])
+           ,ConstrRepr 'ACon (bitmask msb 3) (shiftL 1 (msb-2)) (fieldmasks [fa, fa, st])
+           ,ConstrRepr 'AArg (bitmask msb 4) (shiftL 1 (msb-3)) (fieldmasks [fa, ai])
+           ]) #-}
+deriveBitPack [t| Alt |]
+
+-- | An expanded verion of `Alt`. Under the hood, the bit representation uses a
+--   one-hot encoding for constructor tags, making decode logic a bit faster.
+data UnpackedAlt
+  = UAFun         TemplAddr
+  | UAInt FnArity ShortInt
+  | UACon FnArity FnArity ShortTag
+  | UAArg FnArity ArgIndex
+  deriving (Eq, Show, Generic, NFDataX, ShowX, Lift)
+deriveAnnotation (simpleDerivator OneHot OverlapL) [t| UnpackedAlt |]
+deriveBitPack [t| UnpackedAlt |]
+
 -- | Case tables
-type CaseTable = TemplAddr
+data CaseTable alt
+  = CTInline alt alt
+  -- ^ An inline binary choice of alternatives
+  | CTOffset TemplAddr
+  -- ^ An offset into template memory
+  deriving (Eq, Show, Generic, NFDataX, ShowX, Lift, BitPack)
+
+-- | Get the primary stack's `PushOffset` from an `Alt`'s pop field.
+altPushOffset :: FnArity -> PushOffset
+altPushOffset a =
+  negate $ unpack
+  (resize $ pack a :: BitVector (BitSize PushOffset))
 
 -- | Heap nodes, indexed by max `App` application length and max `Case` application length
 data Node nApp nCase
-  = Case CaseTable (Len nCase) IsCollected (Vec nCase (Maybe Atom))
+  = Case (CaseTable Alt) (Len nCase) IsCollected (Vec nCase (Maybe Atom))
   -- ^ Application describing a case subject with case table for alternatives
   | App  IsNF            (Len nApp ) IsCollected (Vec nApp  (Maybe Atom))
   -- ^ Plain application
@@ -247,7 +306,7 @@ data UnpackedNode len = UnpackedNode
   { nUpdatable :: Bool
   , nArity     :: Len len
   , nAtoms     :: Vec len (Maybe Atom)
-  , nCaseTable :: Maybe CaseTable
+  , nCaseTable :: Maybe (CaseTable UnpackedAlt)
   , nRegIndex  :: Maybe RegIndex
   }
 
@@ -288,11 +347,23 @@ unpackNode
      , nApp <= nMax, nCase <= nMax, 3 <= nMax )
   => Bool -> Node nApp nCase -> UnpackedNode nMax
 unpackNode shared (Case ct  arity _ as) =
-  UnpackedNode shared (resize arity) (leToPlus @nCase @nMax $ as ++ repeat Nothing) (Just ct) Nothing
+  UnpackedNode shared (resize arity) (leToPlus @nCase @nMax $ as ++ repeat Nothing) (Just $ unpackCaseTable ct) Nothing
 unpackNode shared (App isNF arity _ as) =
   UnpackedNode (shared && not isNF) (resize arity) (leToPlus @nApp @nMax $ as ++ repeat Nothing) Nothing Nothing
 unpackNode shared (Prim reg arity _ as) =
   UnpackedNode shared (resize arity) (leToPlus @3 @nMax $ as ++ repeat Nothing) Nothing (Just reg)
+
+-- | Unpack a `CaseTable Alt` to an `CaseTable UnpackedAlt`
+unpackCaseTable :: CaseTable Alt -> CaseTable UnpackedAlt
+unpackCaseTable (CTOffset addr) = CTOffset addr
+unpackCaseTable (CTInline x y) = CTInline (unpackAlt x) (unpackAlt y)
+
+-- | Unpack a `Alt` to an `UnpackedAlt`
+unpackAlt :: Alt -> UnpackedAlt
+unpackAlt (AFun addr) = UAFun addr
+unpackAlt (AInt pop val) = UAInt pop val
+unpackAlt (AArg pop idx) = UAArg pop idx
+unpackAlt (ACon pop arity tag) = UACon pop arity tag
 
 -- | Constructor tag for `False`
 falseAtom :: Atom

@@ -154,8 +154,19 @@ step (INT n0       : PRI 2 op        : x            : stk, p, h, ustk, cstk, reg
   =  (x            : PRI 2 (swap op) : INT n0       : stk, p, h, ustk, cstk, regs, frz)
 
 -- Case select
-step      (CON _ n          : stk , p, h, ustk, c:cstk, regs, frz)
-  =  step (FUN True 0 (n+c) : stk , p, h, ustk,   cstk, regs, frz)
+step      (CON _ n : stk , p, h, ustk, c:cstk, regs, frz)
+  | isFUN e
+  =  step (e       : stk , p, h, ustk,   cstk, regs, frz)
+  | otherwise
+  =       (          stk', p, h, ustk,   cstk, regs, frz)
+  where
+    (d, e) = (\(d,e) -> (d, newChain e)) (pickAlt n c)
+
+    pickAlt n (LOffset n') = (0, FUN True 0 (n+n'))
+    pickAlt n (LInline as) = as !! n
+
+    es   = instAtoms stk h regs [e]
+    stk' = es ++ drop d stk
 
 -- Unfold
 step (FUN ft _ n  : stk, p, h       , ustk,       cstk, regs , frz )

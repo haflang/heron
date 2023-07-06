@@ -39,6 +39,8 @@ frontendM strictAnan nregs (h, i) p =
              >>= return . concApps nregs
              >>= inlineTop i
              >>= return . concApps nregs
+             >>= inlineSmallAlts
+             >>= return . concApps nregs
              >>= return . identifyPredexCandidates nregs
              >>= return . concatApps
              >>= return . strictifyPrim
@@ -53,6 +55,32 @@ elimDeadFuns p = [ Func f args rhs | (Func f args rhs) <- p, f `elem` alives ]
       Nothing -> error $ "No main function when eliminating dead code"
       Just xs -> "main":xs
     cg = closure (maybeCallGraph p)
+
+inlineSmallAlts :: Prog -> Fresh Prog
+inlineSmallAlts p = onExpM inl p
+  where
+    isSmall (Func f args (App e []))  = isSmall (Func f args e)
+    isSmall (Func f args (Int i))     | i < 64
+                                      = Right (toVars args, Int i)
+    isSmall (Func f args (Ctr i a b)) | b < 4
+                                      = Right (toVars args, Ctr i a b)
+    isSmall (Func f args (Var v))     = Right (toVars args, Var v)
+    isSmall (Func f _ _)              = Left  ([], Fun f)
+
+    toVars = map (\(Var v) -> v)
+
+    toAlt (Left a) = freshBody a
+    toAlt (Right a) = freshBody a
+
+    inl (Alts (AFuns fs) n)
+      | length fs <= 2 =
+      let alts = map (isSmall . lookupFunc p) fs
+      in case any isRight alts of
+           False -> return $ Alts (AFuns fs) n
+           True  -> do alts' <- mapM toAlt alts
+                       return $ Alts (AInline alts') n
+
+    inl e = descendM inl e
 
 concApps :: Int -> Prog -> Prog
 concApps 0 = concatApps

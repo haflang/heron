@@ -90,7 +90,7 @@ elim cstk fams p = concatMap comp p
       do es' <- mapM (compFun fun) es
          let fvs = nub $ concat $ zipWith (freeVarsExcept) vss es'
          fs <- zipWithM (calt fun fvs) vss es'
-         let alts = Alts fs (length fvs)
+         let alts = Alts (AFuns fs) (length fvs)
          return ([alts] ++ [Int 0 | cstk && List.null fvs] ++ List.map Var fvs)
       where (ps, es) = unzip as
             vss = List.map (\(App _ args) -> [v | Var v <- args]) ps

@@ -41,7 +41,7 @@ import Heron.Core.Types
 declareBareB [d|
   data CPUIn = CPUIn
     { uStkIn :: SOut    (Index VStkSize, HeapAddr) UStkSize
-    , aStkIn :: SOut    CaseTable                  AStkSize
+    , aStkIn :: SOut    (CaseTable UnpackedAlt   ) AStkSize
     , vStkIn :: PSOut   Atom      Log2MaxPush      VStkSize
     , heapIn :: HeapOut HeapNode  MaxAps           HeapSize
     , tmplIn :: RomOut  Template
@@ -58,7 +58,7 @@ declareBareB [d|
   data CPUOut = CPUOut
     { _uStkPush :: Maybe (Index VStkSize, HeapAddr)
     , _uStkPop  :: Bool
-    , _aStkPush :: Maybe CaseTable
+    , _aStkPush :: Maybe (CaseTable UnpackedAlt)
     , _aStkPop  :: Bool
     , _vStkOut  :: PSIn   Atom      Log2MaxPush
     , _heapOut  :: HeapIn HeapNode  MaxAps         HeapSize
@@ -85,7 +85,7 @@ deriveBitPack [t| Phase |]
 data CPUState = CPUState
   { _phase :: Phase
   , _top'  :: Atom
-  , _alt'  :: Maybe CaseTable
+  , _alt'  :: Maybe (CaseTable UnpackedAlt)
   , _regs  :: Vec MaxRegs Atom
   , _frozenArgs    :: Vec CMaxPush (Maybe Atom)
   , _forwardedNode :: Maybe HeapNode
@@ -116,9 +116,13 @@ defaultOutput CPUState{..} = CPUOut
   }
   where
     heapOp = maybe heapNoOp (\a -> repeat RamNoOp ++ singleton (RamRead a)) . heapAddr
-    romOp  (Fun _ a _  ) _                              = a
-    romOp  (Con _ tag  ) (Just alt)                     = alt + bitCoerce (resize tag)
-    romOp  _             _                              = 0
+    romOp  (Fun _ a _) _                              = a
+    romOp  (Con _ tag) (Just (CTOffset alt         )) = alt + bitCoerce (resize tag)
+    romOp  (Con _ tag) (Just (CTInline (UAFun alt) _))
+      | lsb tag == low  = alt
+    romOp  (Con _ tag) (Just (CTInline _ (UAFun alt)))
+      | lsb tag == high = alt
+    romOp  _             _                            = 0
 
 -- | Synchronous control logic, packaged as a Mealy machine
 cpu :: (HiddenClockResetEnable dom)
@@ -165,6 +169,7 @@ reduce t ins
   | needsUnwind t      = unwind ins
   | needsUpdate t  ins = update ins
   | needsUnfold t  ins = unfold ins
+reduce (Con   _ _) ins = caseSelect ins
 reduce (PrimInt _) ins = prim ins
 reduce t _   =
   error $ "Sim.Core.reduce: Unexpected top atom." P.++ show t
@@ -344,6 +349,25 @@ unfold CPUIn{..} =
     orderRamOp Nothing  b = (b, Nothing)
     orderRamOp (Just a) b = (Just a, b)
 
+-- Instantiate simple, non-function valued inline case alternatives
+caseSelect :: Pure CPUIn -> CPU ()
+caseSelect CPUIn{..} =
+  do let args = takeI @CMaxPush (read vStkIn)
+     let ct   = _top aStkIn
+     t <- use top'
+     popA
+
+     -- Select correct alternative
+     case (t, ct) of
+       (Con _ n, Just (CTInline x y)) ->
+         do let alt = if bitToBool (lsb n) then y else x
+
+            -- Instantiate alt on vstack
+            let (offset, atom) = instAlt args alt
+            updateV offset (Just atom :> repeat Nothing)
+       _ -> error $ "Core.Core.caseSelect: malformed scrutinee"
+
+
 -- Helper functions
 
 needsUnwind :: Atom -> Bool
@@ -361,7 +385,11 @@ needsUnfold :: Atom -> Pure CPUIn -> Bool
 needsUnfold t CPUIn{..} = go t (_top aStkIn)
   where
     go (Fun _ _ _) _ = True
-    go (Con _ _)   _ = True
+    go (Con _ _) (Just (CTOffset _)) = True
+    go (Con _ tag) (Just (CTInline (UAFun _) _))
+      | lsb tag == low  = True
+    go (Con _ tag) (Just (CTInline _ (UAFun _)))
+      | lsb tag == high = True
     go _ _ = False
 
 -- Instantiate an atom relative to current heap pointer, top spine values, and
@@ -380,7 +408,16 @@ inst _ _ regsv (Reg shared indx)
     in dashIf shared arg
 inst _ _ _ a = a
 
-pushA :: CaseTable -> CPU ()
+-- Instantiate an atom relative to current heap pointer, top spine values, and
+-- register contents
+instAlt :: Vec CMaxPush (Maybe Atom) -> UnpackedAlt -> (Offset Log2MaxPush, Atom)
+instAlt _    (UAFun _) = error "Core.Core.instAlt: Unexpected function alt in caseSelect"
+instAlt _    (UAInt pops val      ) = (altPushOffset pops, PrimInt   (resize val))
+instAlt _    (UACon pops arity tag) = (altPushOffset pops, Con arity (resize tag))
+instAlt args (UAArg pops idx      ) = (altPushOffset pops, fromJust $ args !! i)
+  where i = 1 + resize idx :: Index CMaxPush
+
+pushA :: CaseTable UnpackedAlt -> CPU ()
 pushA tab = aStkPush .:= Just tab
 
 popA :: CPU ()
