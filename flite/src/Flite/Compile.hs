@@ -90,12 +90,8 @@ trApp p d app
   | null luts = R.APP (isNormal rest) rest
   | otherwise = R.CASE (head luts) rest
   where
-    app' = rearrange app
     luts = map (trAlt p d . getAlts) $ filter isAlts app
-    rest = map (tr p d) $ filter (not . isAlts) app'
-
-rearrange (Prim p:x:y:rest) = x:Prim p:y:rest
-rearrange app = app
+    rest = map (tr p d) $ filter (not . isAlts) app
 
 indexOf p f =
   case [i | ((g, args, rhs), i) <- zip p [0..], f == g] of

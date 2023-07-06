@@ -42,6 +42,7 @@ declareBareB [d|
   data CPUIn = CPUIn
     { uStkIn :: SOut    (Index VStkSize, HeapAddr) UStkSize
     , aStkIn :: SOut    (CaseTable UnpackedAlt   ) AStkSize
+    , pStkIn :: SOut    PInt                       PStkSize
     , vStkIn :: PSOut   Atom      Log2MaxPush      VStkSize
     , heapIn :: HeapOut HeapNode  MaxAps           HeapSize
     , tmplIn :: RomOut  Template
@@ -60,6 +61,8 @@ declareBareB [d|
     , _uStkPop  :: Bool
     , _aStkPush :: Maybe (CaseTable UnpackedAlt)
     , _aStkPop  :: Bool
+    , _pStkPush :: Maybe PInt
+    , _pStkPop  :: Bool
     , _vStkOut  :: PSIn   Atom      Log2MaxPush
     , _heapOut  :: HeapIn HeapNode  MaxAps         HeapSize
     , _tmplOut  :: RomIn  RomSize
@@ -109,6 +112,8 @@ defaultOutput CPUState{..} = CPUOut
   , _uStkPop  = False
   , _aStkPush = Nothing
   , _aStkPop  = False
+  , _pStkPush = Nothing
+  , _pStkPop  = False
   , _vStkOut = Nothing
   , _heapOut = heapOp _top'      -- Fetch when top is pointer (INV2)
   , _tmplOut = romOp _top' _alt' -- Fetch when top is FUN/CON (INV1)
@@ -209,12 +214,18 @@ prim CPUIn{..} =
   case primOpPat (read vStkIn) of
     -- Args already evaled; perform op
     BothInt x (_, swp, op) y ->
-      do let ans = alu $ AluIn op swp x y
-         updateV (-2) (Just ans :> repeat Nothing)
+      updateV (-2) (Just (doOp op swp x y) :> repeat Nothing)
 
-    -- Second arg unevaluated; swap
-    SndThunk x (ar, swp, op) y ->
-      updateV 0 (Just y :> Just (PrimOp ar (not swp) op) :> Just (PrimInt x) :> repeat Nothing)
+    -- Both args now evaluated but first is on prim stack; perform op
+    SndInt y (_, swp, op) ->
+      let Just x = _top pStkIn in
+      popP >>
+      updateV (-1) (Just (doOp op swp x y) :> repeat Nothing)
+
+    -- Second arg unevaluated; push first onto prim stack
+    FstInt x y ->
+      pushP x >>
+      updateV (-1) (Just y :> repeat Nothing)
 
     -- Special case for SEQ
     Seq x f ->
@@ -222,6 +233,8 @@ prim CPUIn{..} =
 
     -- Unexpected prim op pattern
     NotPrim -> error $ "Core.Core.prim: Malformed args on value stack: " <> show (read vStkIn)
+  where
+    doOp op swp a b = alu $ AluIn op swp a b
 
 -- Update a heap node with its normal form
 update :: Pure CPUIn -> CPU ()
@@ -428,6 +441,12 @@ pushU u = uStkPush .:= Just u
 
 popU :: CPU ()
 popU = uStkPop .:= True
+
+pushP :: PInt -> CPU ()
+pushP p = pStkPush .:= Just p
+
+popP :: CPU ()
+popP = pStkPop .:= True
 
 updateV :: Offset Log2MaxPush -> Vec CMaxPush (Maybe Atom) -> CPU ()
 updateV off as =

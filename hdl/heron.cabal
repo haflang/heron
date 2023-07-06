@@ -108,6 +108,7 @@ library
                -D__VStkSize__=8192
                -D__AStkSize__=4096
                -D__UStkSize__=4096
+               -D__PStkSize__=1024
                -D__HeapSize__=32768
                -D__RomSize__=1024
                -D__TagW__=10

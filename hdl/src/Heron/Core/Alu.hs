@@ -38,8 +38,10 @@ alu (AluIn op swp x y) =
 data PrimOpPat
   = BothInt PInt (FnArity, IsSwapped, OpCode) PInt
   -- ^ Binary operation with both arguments evaluated
-  | SndThunk PInt (FnArity, IsSwapped, OpCode) Atom
+  | FstInt  PInt Atom
   -- ^ Binary operation with only first argument evaluated
+  | SndInt  PInt (FnArity, IsSwapped, OpCode)
+  -- ^ Binary operation with only second argument evaluated
   | Seq     PInt Atom
   -- ^ Special case for `Seq`
   | NotPrim
@@ -59,11 +61,15 @@ primOpPat as = leToPlus @3 @n $ go (takeI @3 as)
         :> Just y
         :> Nil ) = Seq x y
     go (   Just (PrimInt x)
-        :> Just (PrimOp ar swp op)
         :> Just (PrimInt y)
+        :> Just (PrimOp ar swp op)
         :> Nil ) = BothInt x (ar, swp, op) y
     go (   Just (PrimInt x)
         :> Just (PrimOp ar swp op)
+        :> _
+        :> Nil ) = SndInt x (ar, swp, op)
+    go (   Just (PrimInt x)
         :> Just y
-        :> Nil ) = SndThunk x (ar, swp, op) y
+        :> _
+        :> Nil ) = FstInt x y
     go _         = NotPrim

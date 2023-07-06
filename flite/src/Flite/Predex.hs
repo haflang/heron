@@ -33,6 +33,12 @@ ident False scope (App (Fun f) xs) | isPredexId f =
   do xs' <- mapM (ident False scope) xs
      let e' = App (Fun f) xs'
      if checkArgs scope xs' then one (PrimApp f xs') e' else return e'
+-- Prevent PRS candidates on binary prim ops which might be later flattened to
+-- reverse polish notation.
+ident True scope (App (Fun f) es)
+  | isBinaryPrim f =
+    do es' <- mapM (ident True scope) es
+       return $ App (Fun f) es'
 ident spine scope (App e es) =
   return App `ap` ident spine scope e `ap` mapM (ident False scope) es
 ident spine scope (Let bs e) =
@@ -98,7 +104,7 @@ predexReorder maxRegs apps
 
 -- Detect primitive applications
 isPrimitiveApp :: App -> Bool
-isPrimitiveApp (Prim p:args) = True
+isPrimitiveApp [_,_,Prim p] = True
 isPrimitiveApp app = False
 
 -- An application A depends on an application B if A refers to B's result.

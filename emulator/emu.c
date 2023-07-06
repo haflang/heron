@@ -25,6 +25,7 @@
 #define MAXSTACKELEMS  8192
 #define MAXUSTACKELEMS 4096
 #define MAXLSTACKELEMS 4096
+#define MAXPSTACKELEMS 4096
 #define MAXTEMPLATES   1024
 #define CACHELEN    32
 #define TCACHELEN   16
@@ -125,6 +126,7 @@ App* heap2;
 Atom* stack;
 Update* ustack;
 Lut* lstack;
+Atom* pstack;
 Template* code;
 Atom *registers;
 CacheLine* cache;
@@ -132,7 +134,7 @@ TCacheLine* tcache;
 Atom* frozen_stack;
 
 
-Int hp, gcLow, gcHigh, sp, usp, lsp, end, gcCount;
+Int hp, gcLow, gcHigh, sp, usp, lsp, psp, end, gcCount;
 
 Int numTemplates;
 Int nodeLen = APSIZE;
@@ -142,7 +144,7 @@ Int nodeLen = APSIZE;
 Long swapCount, primCount, applyCount, unwindCount,
   updateCount, selectCount, prsCandidateCount, prsSuccessCount, caseCount, heapWaitCount, inlineAltCount, heapAllocCount;
 
-Int maxHeapUsage, maxStackUsage, maxUStackUsage, maxLStackUsage;
+Int maxHeapUsage, maxStackUsage, maxUStackUsage, maxLStackUsage, maxPStackUsage;
 
 Long cacheMisses, cacheHits = 0;
 Int cacheTime = 0;
@@ -728,29 +730,49 @@ Atom prim(Prim p, Atom a, Atom b, Atom c)
 
 void applyPrim()
 {
+
   // Special case for SEQ unary prim
-  Pri p = stack[sp-2].contents.pri;
-  if (p.id == SEQ) {
+  if(stack[sp-1].tag == NUM &&
+     stack[sp-2].tag == PRI &&
+     stack[sp-2].contents.pri.id == SEQ) {
     stack[sp-2] = stack[sp-3];
     stack[sp-3] = stack[sp-1];
     sp-=1;
     primCount++;
-  // Both args evaluated
-  } else if (stack[sp-3].tag == NUM) {
-      if (p.swap == 1)
-        stack[sp-3] = prim(p.id, stack[sp-3], stack[sp-1], stack[4 <= sp ? sp-4 : 0]);
-      else
-        stack[sp-3] = prim(p.id, stack[sp-1], stack[sp-3], stack[4 <= sp ? sp-4 : 0]);
-      sp -= p.arity;
-      primCount++;
-  // Second arg unevaluated
+
+  // Rules for binary prims
+  // If both args are evaluated, do prim op
+  } else if (stack[sp-1].tag == NUM && stack[sp-2].tag == NUM &&
+             stack[sp-3].tag == PRI && stack[sp-3].contents.pri.arity == 2) {
+
+    if (stack[sp-3].contents.pri.swap)
+      stack[sp-3] = prim(stack[sp-3].contents.pri.id, stack[sp-2], stack[sp-1], stack[4 <= sp ? sp-4 : 0]);
+    else
+      stack[sp-3] = prim(stack[sp-3].contents.pri.id, stack[sp-1], stack[sp-2], stack[4 <= sp ? sp-4 : 0]);
+
+    sp -= 2;
+    primCount++;
+
+  // If we've evaluated one but there's another on the stack, go!
+  } else if (stack[sp-1].tag == NUM && psp > 0 &&
+             stack[sp-2].tag == PRI && stack[sp-2].contents.pri.arity == 2) {
+    if (stack[sp-2].contents.pri.swap)
+      stack[sp-2] = prim(stack[sp-2].contents.pri.id, stack[sp-1], pstack[psp-1], stack[3 <= sp ? sp-3 : 0]);
+    else
+      stack[sp-2] = prim(stack[sp-2].contents.pri.id, pstack[psp-1], stack[sp-1], stack[3 <= sp ? sp-3 : 0]);
+    sp -= 1;
+    psp -= 1;
+    primCount++;
+
+  // If we've only evaluated the first arg, push it on pstack and continue;
+  } else if (stack[sp-1].tag == NUM) {
+    pstack[psp] = stack[sp-1];
+    sp -= 1;
+    psp += 1;
+    swapCount++;
+
   } else {
-      Atom tmp;
-      stack[sp-2].contents.pri.swap = !stack[sp-2].contents.pri.swap;
-      tmp = stack[sp-1];
-      stack[sp-1] = stack[sp-3];
-      stack[sp-3] = tmp;
-      swapCount++;
+      error("applyPrim(): invalid stack");
   }
 }
 
@@ -790,13 +812,13 @@ void instApp(Int base, App *app)
 
   if (app->tag == PRIM) {
     prsCandidateCount++;
-    a = app->atoms[0]; b = app->atoms[2];
+    a = app->atoms[0]; b = app->atoms[1];
     a = getPrimArg(a);
     b = getPrimArg(b);
     rid = app->details.regId;
     if (a.tag == NUM && b.tag == NUM) {
       prsSuccessCount++;
-      registers[rid] = prim(app->atoms[1].contents.pri.id, a, b, b);
+      registers[rid] = prim(app->atoms[2].contents.pri.id, a, b, b);
     }
     else {
       registers[rid].tag = VAR;
@@ -1019,6 +1041,7 @@ void alloc()
   stack = (Atom*) malloc(sizeof(Atom) * MAXSTACKELEMS);
   ustack = (Update*) malloc(sizeof(Update) * MAXUSTACKELEMS);
   lstack = (Lut*) malloc(sizeof(Lut) * MAXLSTACKELEMS);
+  pstack = (Atom*) malloc(sizeof(Atom) * MAXPSTACKELEMS);
   code = (Template*) malloc(sizeof(Template) * MAXTEMPLATES);
   registers = (Atom*) calloc(sizeof(Atom), MAXREGS);
   profTable = (ProfEntry*) malloc(sizeof(ProfEntry) * MAXTEMPLATES);
@@ -1041,7 +1064,7 @@ void initProfTable()
 void init()
 {
   sp = 1;
-  usp = lsp = hp = 0;
+  usp = lsp = psp = hp = 0;
   stack[0] = mainAtom;
   swapCount = primCount = applyCount =
     unwindCount = updateCount = selectCount =
@@ -1058,8 +1081,8 @@ static inline Bool canCollect()
 
 void stackOverflow(const char *which)
 {
-    error("%s is out of space (hp = %d, sp = %d, usp = %d, lsp = %d).",
-          which, hp, sp, usp, lsp);
+    error("%s is out of space (hp = %d, sp = %d, usp = %d, lsp = %d, psp = %d).",
+          which, hp, sp, usp, lsp, psp);
 }
 
 void integerAddOverflow(int a, int b)
@@ -1077,10 +1100,12 @@ void dispatch()
       if (sp > maxStackUsage) maxStackUsage = sp;
       if (usp > maxUStackUsage) maxUStackUsage = usp;
       if (lsp > maxLStackUsage) maxLStackUsage = lsp;
+      if (psp > maxPStackUsage) maxPStackUsage = psp;
 
     if (sp > MAXSTACKELEMS-50) stackOverflow("stack");
     if (usp > MAXUSTACKELEMS-4) stackOverflow("update stack");
     if (lsp > MAXLSTACKELEMS-4) stackOverflow("case stack");
+    if (psp > MAXPSTACKELEMS-4) stackOverflow("prim stack");
     if (hp > MAXHEAPAPPS-200 && canCollect()) collect();
 
     /* Trace */
@@ -1101,6 +1126,12 @@ void dispatch()
             putchar(' ');
         }
         //printf("\n");
+
+        //printf("PrimStack :");
+        //for (int i = psp - 1; i >= 0; --i) {
+        //    showAtom(pstack[i]);
+        //    putchar(' ');
+        //}
 
         //printf("UStack:");
         //for (int i = usp-1; i >= 0; --i) {
@@ -1138,7 +1169,7 @@ void dispatch()
     }
     else {
       switch (top.tag) {
-        case NUM: assert(stack[sp-2].tag == PRI); applyPrim(); break;
+        case NUM: applyPrim(); break;
         case FUN: profTable[top.contents.fun.id].callCount++; applyCount++;
                   tmpl = tcachedRead(top.contents.fun.id);
                   apply(&tmpl); break;
@@ -1439,6 +1470,7 @@ int main(int argc, char *argv[])
       printf("Max Stack   = %12d\n", maxStackUsage);
       printf("Max UStack  = %12d\n", maxUStackUsage);
       printf("Max LStack  = %12d\n", maxLStackUsage);
+      printf("Max PStack  = %12d\n", maxPStackUsage);
       if (cacheHits + cacheMisses > 0)
         printf("Cache hit   = %11lld%%\n", 100 * cacheHits / (cacheHits+cacheMisses));
       if (tcacheHits + tcacheMisses > 0)

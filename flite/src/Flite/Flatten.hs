@@ -30,8 +30,25 @@ flatten e
     vs = map fst binds
 
 flattenSpine :: Exp -> Flatten App
+flattenSpine (App (Fun p) (a:rest))
+  | isUnaryPrim p
+  = do a'    <- flattenSpine a
+       rest' <- mapM flattenExp rest
+       return $ a' ++ [Fun p] ++ rest'
+flattenSpine (App (Fun p) (a:b:rest))
+  | isBinaryPrim p
+  = do a'    <- flattenSpine a
+       b'    <- flattenSpine b
+       case rest of
+         []     -> return $ a' ++ b' ++ [Fun p]
+         (e:es) -> do rest' <- flattenSpine (App e es)
+                      return $ a' ++ b' ++ [Fun p] ++ rest'
 flattenSpine (App e es) = mapM flattenExp (e:es)
-flattenSpine (PrimApp p es) = return (Prim p:) `ap` mapM flattenExp es
+flattenSpine (PrimApp p (a:b:rest))
+  = do a' <- flattenExp a
+       b' <- flattenExp b
+       rest' <- mapM flattenExp rest
+       return $ a' : b' : Prim p : rest'
 flattenSpine (Let bs e) =
   do (bs', e') <- freshLet (bs, e)
      let (vs, es) = unzip bs'
@@ -40,15 +57,41 @@ flattenSpine (Let bs e) =
 flattenSpine e = (:[]) `fmap` flattenExp e
 
 flattenExp :: Exp -> Flatten Exp
+flattenExp (App (Fun p) (a:rest))
+  | isUnaryPrim p =
+  do i <- fresh
+     a' <- flattenSpine a
+     rest' <- mapM flattenExp rest
+     write(i, a' ++ [Fun p] ++ rest')
+     return (Var i)
+-- FIXME I've hardcoded this for APLEN=4 for heap aps... Naughty
+flattenExp (App (Fun p) (a:b:rest))
+  | isBinaryPrim p && (apLen a + apLen b < 4) =
+  do i <- fresh
+     a' <- flattenSpine a
+     b' <- flattenSpine b
+     rest' <- mapM flattenExp rest
+     write(i, a' ++ b' ++ [Fun p] ++ rest')
+     return (Var i)
+flattenExp (App (Fun p) (a:b:rest))
+  | isBinaryPrim p =
+  do i <- fresh
+     a' <- flattenExp a
+     b' <- flattenExp b
+     rest' <- mapM flattenExp rest
+     write(i, [a', b', Fun p] ++ rest')
+     return (Var i)
 flattenExp (App e es) =
   do i <- fresh
      app <- mapM flattenExp (e:es)
      write (i, app)
      return (Var i)
-flattenExp (PrimApp p es) =
+flattenExp (PrimApp p (a:b:rest)) =
   do i <- fresh
-     app <- mapM flattenExp es
-     write (i, Prim p:app)
+     a' <- flattenExp a
+     b' <- flattenExp b
+     rest' <- mapM flattenExp rest
+     write (i, a':b':Prim p:rest')
      return (Var i)
 flattenExp (Let bs e) =
   do (bs', e') <- freshLet (bs, e)

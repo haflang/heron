@@ -60,9 +60,11 @@ board heapPrim tmplPrim romCtrl begin = (CPUIn{..}, CPUOut{..})
 
     uStkRam = blockRam1 ClearOnReset (SNat @UStkSize) Nothing
     aStkRam = blockRam1 ClearOnReset (SNat @AStkSize) Nothing
+    pStkRam = blockRam1 ClearOnReset (SNat @PStkSize) Nothing
 
     uStkIn = newStack uStkRam $ bundle (_uStkPush, _uStkPop)
     aStkIn = newStack aStkRam $ bundle (_aStkPush, _aStkPop)
+    pStkIn = newStack pStkRam $ bundle (_pStkPush, _pStkPop)
     vStkIn = newCachedParStack _vStkOut
     heapIn = heapPrim _heapOut
     tmplIn = (head . read) <$>

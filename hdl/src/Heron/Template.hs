@@ -23,6 +23,7 @@ module Heron.Template
   , VStkSize
   , AStkSize
   , UStkSize
+  , PStkSize
   , HeapSize
   , RomSize
 
@@ -133,6 +134,8 @@ type VStkSize   = __VStkSize__
 type AStkSize   = __AStkSize__
 -- | Depth of /u/pdate pointer stack
 type UStkSize   = __UStkSize__
+-- | Depth of /p/pdate stack
+type PStkSize   = __PStkSize__
 -- | Depth of heap memory
 type HeapSize   = __HeapSize__
 -- | Depth of template memory
