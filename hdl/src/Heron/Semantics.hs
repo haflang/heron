@@ -43,7 +43,7 @@ type AStack    = [LUT]
 type Regs      = [Atom]
 
 -- | Full system state
-type State = (Stack, Prog, Heap, UStack, AStack, Regs)
+type State = (Stack, Prog, Heap, UStack, AStack, Regs, Stack)
 
 -- Helpers
 
@@ -130,39 +130,40 @@ newChain a = a
 step :: State -> State
 
 -- Unwind
-step (VAR s n     : stk, p, h,       ustk,       cstk, regs)
-  =  (dashs s es ++ stk, p, h, us ++ ustk, cs ++ cstk, regs)
+step (VAR s n     : stk, p, h,       ustk,       cstk, regs, frz)
+  =  (dashs s es ++ stk, p, h, us ++ ustk, cs ++ cstk, regs, frz)
   where
     (isNF, cs, es) = splitApp (h !! n)
     us = if (s && not isNF) then [(length stk, n)] else []
 
 -- Update
-step (e     : stk, p, h , (sp,n) : ustk, cstk, regs)
+step (e     : stk, p, h , (sp,n) : ustk, cstk, regs, frz)
   | arity e > length stk - sp
-  =  (es1' ++ es2, p, h',          ustk, cstk, regs)
+  =  (es1' ++ es2, p, h',          ustk, cstk, regs, frz)
   where
     (es1, es2) = splitAt (arity e) (e:stk)
     es1'       = dashs True es1
     h' = write h n (APP True es1)
 
 -- Primitives
-step (INT n        : PRI _ "(!)"  : e               : stk, p, h, ustk, cstk, regs)
-  =  (               e               : INT n        : stk, p, h, ustk, cstk, regs)
-step (INT n0       : PRI 2 op        : INT n1       : stk, p, h, ustk, cstk, regs)
-  =  (                                 alu op n0 n1 : stk, p, h, ustk, cstk, regs)
-step (INT n0       : PRI 2 op        : x            : stk, p, h, ustk, cstk, regs)
-  =  (x            : PRI 2 (swap op) : INT n0       : stk, p, h, ustk, cstk, regs)
+step (INT n        : PRI _ "(!)"  : e               :  stk, p, h, ustk, cstk, regs, frz)
+  =  (               e               : INT n        : stk, p, h, ustk, cstk, regs, frz)
+step (INT n0       : PRI 2 op        : INT n1       : stk, p, h, ustk, cstk, regs, frz)
+  =  (                                 alu op n0 n1 : stk, p, h, ustk, cstk, regs, frz)
+step (INT n0       : PRI 2 op        : x            : stk, p, h, ustk, cstk, regs, frz)
+  =  (x            : PRI 2 (swap op) : INT n0       : stk, p, h, ustk, cstk, regs, frz)
 
 -- Case select
-step      (CON _ n          : stk , p, h, ustk, c:cstk, regs)
-  =  step (FUN True 0 (n+c) : stk , p, h, ustk,   cstk, regs)
+step      (CON _ n          : stk , p, h, ustk, c:cstk, regs, frz)
+  =  step (FUN True 0 (n+c) : stk , p, h, ustk,   cstk, regs, frz)
 
 -- Unfold
-step (FUN ft _ n  : stk, p, h       , ustk,       cstk, regs )
-  =  (es' ++ drop a stk, p, h ++ us', ustk, cs ++ cstk, regs')
+step (FUN ft _ n  : stk, p, h       , ustk,       cstk, regs , frz )
+  =  (es' ++ drop a stk, p, h ++ us', ustk, cs ++ cstk, regs', frz')
   where (_, a, cs, es, us) = p !! n
-        es' = instAtoms stk h regs es
-        (us', regs') = foldl (instApp stk h) ([], regs) us
+        frz' = if ft then stk else frz
+        es' = instAtoms frz' h regs es
+        (us', regs') = foldl (instApp frz' h) ([], regs) us
 
 step s = error $ "Missing pattern in step: " ++ show s
 
@@ -175,8 +176,8 @@ run :: Prog
     -- ^ (Cycle count, Return value)
 run prog = eval 0 initialState
   where
-    initialState = ([FUN True 0 0], prog, [], [], [], replicate maxRegs (INT 0))
-    eval n ([INT i], _, _, _, _, _) = (n, i)
+    initialState = ([FUN True 0 0], prog, [], [], [], replicate maxRegs (INT 0), [])
+    eval n ([INT i], _, _, _, _, _, _) = (n, i)
     eval n s = eval (n+1) (step s)
     maxRegs = snatToNum (SNat @MaxRegs)
 

@@ -75,6 +75,7 @@ deriving instance ShowX   (Pure CPUOut)
 data Phase
   = Init      -- ^ Initialising
   | Reduce    -- ^ Performing reductions
+  | HeapStall -- ^ Stalling until heap port becomes available
   | Halt      -- ^ Finished reducing
   | GC        -- ^ Performing garbage collection (not yet implemented!)
   deriving (Show, Generic, NFDataX, Enum, Bounded, Eq)
@@ -86,6 +87,8 @@ data CPUState = CPUState
   , _top'  :: Atom
   , _alt'  :: Maybe CaseTable
   , _regs  :: Vec MaxRegs Atom
+  , _frozenArgs    :: Vec CMaxPush (Maybe Atom)
+  , _forwardedNode :: Maybe HeapNode
   }
   deriving (Generic, NFDataX)
 makeLenses ''CPUState
@@ -96,6 +99,8 @@ initCPUState = CPUState
   , _top'  = PrimInt 0
   , _alt'  = Nothing
   , _regs  = repeat (PrimInt 0)
+  , _frozenArgs    = repeat Nothing
+  , _forwardedNode = Nothing
   }
 
 defaultOutput :: CPUState -> Pure CPUOut
@@ -139,6 +144,8 @@ step ins@CPUIn{..} =
         Just initAddr ->
           phase .= Reduce >>
           updateV 0 (Just (Fun 0 initAddr True) :> repeat Nothing)
+    HeapStall ->
+      phase .= Reduce
     Reduce ->
       if halt    then phase .= Halt else
       if needsGC then phase .= GC   else
@@ -172,7 +179,10 @@ unwind CPUIn{..} =
      let haddr = fromJust $ heapAddr t
      let shared = isShared t
 
-     let node = last $ read heapIn
+     -- Node to unwind is either forwarded via CPUState or prefetched from heap.
+     fwd <- use forwardedNode
+     forwardedNode .= Nothing
+     let node = fromMaybe (last $ read heapIn) fwd
      let unode = unpackNode shared node
 
      -- Possibly register update address
@@ -252,7 +262,10 @@ unfold CPUIn{..} =
      when (isCon t)
           popA
 
-     let args = takeI $ read vStkIn
+     -- Freeze args when starting new chain of split templates
+     when (newTmplChain t)
+          (frozenArgs .= (takeI $ read vStkIn))
+     args <- use frozenArgs
 
      -- Instantiate all template atoms
      -- Resolves ARGs, REGs, and PTRs
@@ -267,49 +280,69 @@ unfold CPUIn{..} =
      updateV pushOffset (nAtoms uSpineAp)
      maybe (return ()) pushA (nCaseTable uSpineAp)
 
-     -- Instantiate apps on heap and PRS regs
-     let (_, heapCtrl, regs') = foldl
-           instNode
-           (hp, repeat @MaxAps RamNoOp, primRegs)
-           heapAps
-     regs     .= regs'
-     arbitrateHeap heapCtrl heapAps hp
+     -- Heap prefetching logic, using forwarding for references to newly
+     -- allocated nodes
+     let spineHead =
+           fromJust $ head (nAtoms . unpackNode False $ tSpine tmplIn
+             :: Vec CMaxPush (Maybe Atom))
+     let defReadCtrl = fmap RamRead $ heapAddr (fromJust . head $ nAtoms uSpineAp)
+     let (readCtrl, fwdNode)
+           = case heapAddr spineHead of
+               Just addr -> case (addr < fromSNat (lengthS heapAps)) of
+                              True  -> (Nothing, heapAps !! addr)
+                              False -> (defReadCtrl, Nothing)
+               Nothing   -> (defReadCtrl, Nothing)
+     forwardedNode .= fwdNode
+
+     -- Instantiate heap apps
+     case head (tAps tmplIn) of
+       -- When instantiating PRS candidates, we know that it's a split template
+       -- and we will never need to prefetch. Allocation is a bit trickier
+       -- though, since we dynamically avoid committing successful PRS
+       -- candidates to heap memory.
+       Just (Prim _ _ _ _) ->
+         let ((_, regs'), writeCtrls) = mapAccumL instPRSNode (hp, primRegs) heapAps
+         in regs .= regs' >>
+            heapOut .:= writeCtrls
+       -- Non-PRS applications require prefetching arbitrarion but uses simple
+       -- allocation.
+       _ -> let writeCtrls =
+                  imap (\offset node -> fmap (RamWrite $ resize offset + hp) node) heapAps
+            in arbitrateHeap readCtrl writeCtrls
+
   where
+    newTmplChain (Fun _ _ False) = False
+    newTmplChain _               = True
+
     -- Incrementally build controls for instantiating heap nodes
     -- PRS makes this tricky since we might not allocate anything to the heap
-    instNode (addr, ctrls, rs) (Just (Prim reg _ _ as)) =
+    instPRSNode (addr, rs) (Just (Prim reg _ _ as)) =
       case primOpPat as of
         -- If arguments are ints, reduce op now; no heap allocation
         BothInt x (_, _, op) y ->
-          ( addr
-          , ctrls
-          , replace reg (alu $ AluIn op False x y) rs
+          ( (addr
+            ,replace reg (alu $ AluIn op False x y) rs)
+          , RamNoOp
           )
         -- Otherwise, dump onto heap
         _ ->
           let app = App False 3 False (as ++ repeat Nothing) in
-          ( addr+1
-          , RamWrite addr app +>> ctrls
-          , replace reg (Ptr False addr) rs
+          ( (addr+1
+            ,replace reg (Ptr False addr) rs)
+          , RamWrite addr app
           )
-    -- Non-PRS nodes are just allocated
-    instNode (addr, ctrls, rs) (Just n) =
-      ( addr+1
-      , RamWrite addr n +>> ctrls
-      , rs
-      )
     -- Ignore empties
-    instNode acc Nothing = acc
+    instPRSNode acc _ = (acc, RamNoOp)
 
-    -- If we also need to prefetch a heap node, try to avoid a stall
-    arbitrateHeap ctrls aps hp = do
-      -- Do we need to attempt prefetching (next cycle is `unwind`)?
-      t' <- use top'
-      case heapAddr t' of
-        -- Nope, we're OK
-        Nothing   -> heapOut .:= ctrls
-        -- Yes, but is it problematic?
-        Just addr -> heapOut .:= (init ctrls ++ singleton (RamRead addr))
+    -- If we can't prefetch from the heap, we might need to stall
+    arbitrateHeap rd wrs = do
+      let (opDo, opSkip) = orderRamOp (last wrs) rd
+      heapOut .:= map (fromMaybe RamNoOp) (init wrs ++ singleton opDo)
+      phase .= case opSkip of
+                 Nothing -> Reduce
+                 Just _  -> HeapStall
+    orderRamOp Nothing  b = (b, Nothing)
+    orderRamOp (Just a) b = (Just a, b)
 
 -- Helper functions
 

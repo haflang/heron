@@ -127,6 +127,7 @@ Template* code;
 Atom *registers;
 CacheLine* cache;
 TCacheLine* tcache;
+Atom* frozen_stack;
 
 
 Int hp, gcLow, gcHigh, sp, usp, lsp, end, gcCount;
@@ -137,7 +138,7 @@ Int nodeLen = APSIZE;
 /* Profiling info */
 
 Long swapCount, primCount, applyCount, unwindCount,
-  updateCount, selectCount, prsCandidateCount, prsSuccessCount, caseCount, inlineAltCount, heapAllocCount;
+  updateCount, selectCount, prsCandidateCount, prsSuccessCount, caseCount, heapWaitCount, inlineAltCount, heapAllocCount;
 
 Int maxHeapUsage, maxStackUsage, maxUStackUsage, maxLStackUsage;
 
@@ -503,7 +504,7 @@ void displayProfTable()
   printf("Average App  Len  = %6.2f \n", avgApLen);
   printf("Total unfolds = %11lld\n", applyCount);
   printf("Total ticks   = %11lld\n",
-         swapCount + primCount + applyCount + unwindCount + updateCount);
+         swapCount + primCount + applyCount + unwindCount + updateCount  + heapWaitCount);
 }
 
 #if ONEBITGC_STUDY1
@@ -740,13 +741,13 @@ void applyPrim()
 
 /* Function application */
 
-Atom inst(Int base, Int argPtr, Atom a)
+Atom inst(Int base, Atom a)
 {
   if (a.tag == VAR) {
     a.contents.var.id = base + a.contents.var.id;
   }
   else if (a.tag == ARG) {
-    a = dash(a.contents.arg.shared, stack[argPtr-a.contents.arg.index]);
+    a = dash(a.contents.arg.shared, frozen_stack[a.contents.arg.index]);
   }
   else if (a.tag == REG) {
     a = dash(a.contents.reg.shared, registers[a.contents.reg.index]);
@@ -755,14 +756,14 @@ Atom inst(Int base, Int argPtr, Atom a)
   return a;
 }
 
-Atom getPrimArg(Int argPtr, Atom a)
+Atom getPrimArg(Atom a)
 {
-  if (a.tag == ARG) return stack[argPtr-a.contents.arg.index];
+  if (a.tag == ARG) return frozen_stack[a.contents.arg.index];
   else if (a.tag == REG) return registers[a.contents.reg.index];
   else return a;
 }
 
-void instApp(Int base, Int argPtr, App *app)
+void instApp(Int base, App *app)
 {
   Int i;
   Atom a, b;
@@ -775,8 +776,8 @@ void instApp(Int base, Int argPtr, App *app)
   if (app->tag == PRIM) {
     prsCandidateCount++;
     a = app->atoms[0]; b = app->atoms[2];
-    a = getPrimArg(argPtr, a);
-    b = getPrimArg(argPtr, b);
+    a = getPrimArg(a);
+    b = getPrimArg(b);
     rid = app->details.regId;
     if (a.tag == NUM && b.tag == NUM) {
       prsSuccessCount++;
@@ -790,7 +791,7 @@ void instApp(Int base, Int argPtr, App *app)
       new->details.normalForm = 0;
       new->size = app->size;
       for (i = 0; i < app->size; i++)
-        new->atoms[i] = inst(base, argPtr, app->atoms[i]);
+        new->atoms[i] = inst(base, app->atoms[i]);
       cachedWrite(hp, *new);
       heapAllocCount++;
       hp++;
@@ -800,7 +801,7 @@ void instApp(Int base, Int argPtr, App *app)
     new->tag = app->tag;
     new->size = app->size;
     for (i = 0; i < app->size; i++)
-      new->atoms[i] = inst(base, argPtr, app->atoms[i]);
+      new->atoms[i] = inst(base, app->atoms[i]);
     if (app->tag == CASE) new->details.lut = app->details.lut;
     if (app->tag == AP) new->details.normalForm = app->details.normalForm;
     cachedWrite(hp, *new);
@@ -822,13 +823,24 @@ void apply(Template* t)
   Int base = hp;
   Int spOld = sp;
 
+  // if this is the first in a set of split templates, we need to freeze a copy
+  // of the stack for argument referencing.
+  if (stack[sp-1].contents.fun.original)
+    for (i=0; i<MAXPUSH; i++)
+      frozen_stack[i] = stack[sp-2-i];
+
   for (i = t->numLuts-1; i >= 0; i--) lstack[lsp++] = t->luts[i];
   for (i = 0; i < t->numApps; i++)
-    instApp(base, spOld-2, &(t->apps[i]));
+    instApp(base, &(t->apps[i]));
   for (i = t->numPushs-1; i >= 0; i--)
-    stack[sp++] = inst(base, spOld-2, t->pushs[i]);
+    stack[sp++] = inst(base, t->pushs[i]);
 
   slide(spOld, t->arity+1);
+
+  // If we ran out of heap ports when trying to prefetch from heap,
+  // and we cannot forward the application, incurr a 1-cycle penalty
+  if (hp-base >= MAXAPS && stack[sp-1].tag == VAR && stack[sp-1].contents.var.id < base)
+    heapWaitCount++;
 }
 
 /* Case-alt selection */
@@ -980,6 +992,7 @@ void alloc()
   profTable = (ProfEntry*) malloc(sizeof(ProfEntry) * MAXTEMPLATES);
   cache = (CacheLine*) calloc(sizeof(CacheLine), CACHELEN);
   tcache = (TCacheLine*) calloc(sizeof(TCacheLine), TCACHELEN);
+  frozen_stack = (Atom*) malloc(sizeof(Atom) * MAXPUSH);
 }
 
 /* Initialise globals */
@@ -1000,7 +1013,7 @@ void init()
   stack[0] = mainAtom;
   swapCount = primCount = applyCount =
     unwindCount = updateCount = selectCount =
-      prsCandidateCount = prsSuccessCount = gcCount = caseCount = 0;
+      prsCandidateCount = prsSuccessCount = gcCount = caseCount = heapWaitCount = 0;
   initProfTable();
 }
 
@@ -1349,7 +1362,7 @@ int main(int argc, char *argv[])
   init();
   dispatch();
 
-  ticks = swapCount + primCount + applyCount + unwindCount + updateCount;
+  ticks = swapCount + primCount + applyCount + unwindCount + updateCount + heapWaitCount;
   if (verbose) {
       printf("\n==== EXECUTION REPORT ====\n");
       printf("Result      = %12i\n", stack[0].contents.num);
@@ -1361,6 +1374,7 @@ int main(int argc, char *argv[])
       printf("Apply       = %11lld%%\n", (100*applyCount)/ticks);
       printf("PRS Success = %11lld%%\n",
              (100*prsSuccessCount)/(1+prsCandidateCount));
+      printf("Heap Wait   = %11lld%%\n", (100*heapWaitCount)/ticks);
       printf("#GCs        = %12d\n", gcCount);
       printf("#Cases      = %12lld\n", caseCount);
       printf("#Templates  = %12d\n", numTemplates);

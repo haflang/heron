@@ -46,13 +46,15 @@ splitApps n apps = cs ++ ds
     splitApp' (v, app) = (,) v `fmap` (splitApp n app)
 
 splitSpine :: Int -> [(Id, App)] -> (App, [(Id, App)], [Exp])
-splitSpine n ((v, app):rest)
+splitSpine n ((v, app):rest) = (spine, rest, luts)
+{-
   | length spine <= n = (spine, rest, luts)
   | otherwise =
       ( Var v:takeBack (n-1) spine
       , (v, dropBack (n-1) spine):rest
       , luts
       )
+-}
   where
     spine = filter (not . isAlts) app
     luts = filter isAlts app
@@ -144,50 +146,66 @@ flagFuns i p = map flag p
 -- not refer to any of that template's applications (the 'refers
 -- check').
 
-fragment :: Int -> Int -> R.Prog -> R.Prog
-fragment n m p = flagFuns (length p) (p' ++ ts')
+fragment :: Int -> Int -> Int -> R.Prog -> R.Prog
+fragment s n m p = flagFuns (length p) (p' ++ ts')
   where
-    (_, ts, p') = runWS (mapM (frag n m) p) (length p)
+    (_, ts, p') = runWS (mapM (frag s n m) p) (length p)
     ts' = map snd (sortBy cmp ts)
     cmp (a, b) (c, d) = compare a c
 
 sub n m = m-n
 
-frag n m (f, pop, luts, push, apps)
-  | length apps >= n || any isPRIM apps = fr n m (f, pop, luts, push, apps)
-  | length luts > m =
-      do x <- newId
-         t <- frag n m (f, pop, dropBack m luts, push, apps)
-         write (x, t)
-         return (f, 0, takeBack m luts, [R.FUN False 0 x], [])
-  | refersCheck (head push) = fr n m (f, pop, luts, push, apps)
+frag s n m (f, pop, luts, push, apps)
+  -- Violated template dimensions
+  | length apps > n || length luts > m || length push > s
+    = fr s n m (f, pop, luts, push, apps)
+  -- We have PRS candidates, so might need to reorder
+  | any isPRIM apps = fr s n m (f, pop, luts, push, apps)
+  -- OK
   | otherwise = return (f, pop, luts, push, apps)
 
-fr n m (f, pop, luts, push, apps) =
-   do x <- newId
-      let offset = length (take n apps0)
-      let apps' = map (relocate (sub offset)) (drop n apps0 ++ apps1)
-      let push' = map (reloc (sub offset)) push
-      t <- frag n m (f, pop, dropBack m luts, push', apps')
-      write (x, t)
-      return (f, 0, takeBack m luts, [R.FUN False 0 x], take n apps0)
-   where
-     (apps0, apps1) = splitPredexes apps
+fr s n m (f, pop, luts, push, apps) =
+  do x <- newId
+     let offset = length (take n appsHere)
+     let (apps0,apps') = (take n appsHere
+                         ,map (relocate (sub offset)) (drop n appsHere ++ appsLater))
+
+     let (push0,push') = if length pushHere <= s && null pushLater -- PREVENT EMPTY SPINES ON LAST TEMPLATE
+                           then ( []
+                                , map (reloc (sub offset)) pushHere)
+                           else ( takeBack (s-1) pushHere
+                                , map (reloc (sub offset)) (pushLater ++ dropBack (s-1) pushHere))
+     let (luts0,luts') = (takeBack m luts, dropBack m luts)
+     t <- frag s n m (f, 0, luts', push', apps')
+     write (x, t)
+     return (f, pop, luts0, (R.FUN False 0 x : push0), apps0)
+  where
+    (appsHere, appsLater) = splitPredexes apps
+    (pushHere, pushLater) = splitSpineByPredexes push apps appsHere
+{-
+fr s n m (f, pop, luts, push, apps) =
+  do x <- newId
+     let offset = length (take n apps0)
+     let apps' = map (relocate (sub offset)) (drop n apps0 ++ apps1)
+     let push' = map (reloc (sub offset)) push
+     t <- frag s n m (f, pop, dropBack m luts, push', apps')
+     write (x, t)
+     return (f, 0, takeBack m luts, [R.FUN False 0 x], take n apps0)
+  where
+    (apps0, apps1) = splitPredexes apps
+-}
 
 relocate f app = mapAtoms (reloc f) app
 
 reloc f (R.VAR sh i) = R.VAR sh (f i)
 reloc f x = x
 
-refersCheck (R.VAR sh i) = i >= 0
-refersCheck _ = False
-
 -- Top-level compilation
 
 redCompile :: (InlineFlag, InlineFlag) -> Bool -> Int -> Int -> Int
            -> Int -> Int -> Prog -> R.Prog
 redCompile hi strictAnan slen alen napps nluts nregs =
-  fragment napps nluts . translate hi strictAnan alen slen nregs
+  fragment slen napps nluts . translate hi strictAnan alen slen nregs
 
 -- Auxiliary functions
 

@@ -173,6 +173,24 @@ splitPredexes apps
     refersTo (R.REG _ r) rs = r `elem` rs
     refersTo _ rs = False
 
+splitSpineByPredexes :: [R.Atom] -> [R.App] -> [R.App] -> ([R.Atom], [R.Atom])
+splitSpineByPredexes s aps tmplAps = pRev . span (not . hasDep) $ reverse s
+  where
+    hasDep (R.REG _ i) = i `elem` uninstRegs
+    hasDep (R.VAR _ i) = case iOfFirstReg of
+      Nothing -> False
+      Just ir -> i > ir
+    hasDep _ = False
+
+    uninstRegs = catMaybes $ map getAllocedReg aps
+
+    iOfFirstReg = findIndex isPRIM tmplAps
+
+    getAllocedReg (R.PRIM r _) = Just r
+    getAllocedReg _            = Nothing
+
+    pRev (a,b) = (reverse a, reverse b)
+
 isPRIM :: R.App -> Bool
 isPRIM (R.PRIM r as) = True
 isPRIM _ = False
