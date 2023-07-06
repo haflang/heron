@@ -61,8 +61,8 @@ final: prev:
 
               # Generate verilog netlist during build
               postBuild = (old.postBuild or "") + ''
-                dist/build/heron/heron --clash --verilog Heron.Core.Board                          -package-db dist/package.conf.inplace -fclash-hdldir ./verilog
-                dist/build/heron/heron --clash --verilog Heron.Core.Board -fclash-force-undefined0 -package-db dist/package.conf.inplace -fclash-hdldir ./verilog_no_x
+                dist/build/heron/heron --clash --verilog Heron.Core.Board -fclash-aggressive-x-optimization                          -package-db dist/package.conf.inplace -fclash-hdldir ./verilog
+                dist/build/heron/heron --clash --verilog Heron.Core.Board -fclash-aggressive-x-optimization -fclash-force-undefined0 -package-db dist/package.conf.inplace -fclash-hdldir ./verilog_no_x
               '';
     
               # Copy verilog netlist to install folder
