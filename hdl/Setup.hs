@@ -1,5 +1,5 @@
-import Prelude
-import Distribution.Simple
+import           Distribution.Simple
+import           Prelude
 
 main :: IO ()
 main = defaultMain

@@ -4,34 +4,35 @@ An unsafe primitive for Xilinx UltraRam/BlockRam.
 
 This is a true dual-port RAM with some extra restrictions:
   + Both ports share a clock and a global enable
-  + Only 'NO_EFFECT' mode is supported
+  + Only @NO_EFFECT@ mode is supported
   + Memory is uninitialised on restart
 
-We reuse Clash's 'trueDualPortRam' simulation code, while only providing our own
-verilog template for UltraRam inference. The simulation actually uses the
-'READ_FIRST' mode. This isn't an issue for the current Heron implementation, but
-can cause a mismatch between simulation behaviour and sythesised behaviour. Here
-be dragons.
+We reuse Clash's @Clash.Explicit.BlockRam.trueDualPortRam@ simulation code,
+while only providing our own verilog template for UltraRam inference. The
+simulation actually uses the @WRITE_FIRST@ mode. This isn't an issue for the
+current Heron implementation, but can cause a mismatch between simulation
+behaviour and sythesised behaviour. Here be dragons.
 
 -}
-{-# LANGUAGE QuasiQuotes, MagicHash #-}
-module Heron.Xilinx.DualPortRam
+{-# LANGUAGE MagicHash   #-}
+{-# LANGUAGE QuasiQuotes #-}
+module Heron.Primitives.DualPortRam
   ( RamArch(..)
   , dpRamE
   , dpRam
-  , deepUltraRam
   ) where
 
-import Clash.Annotations.Primitive
-import qualified Clash.Explicit.BlockRam as E
-import Clash.Prelude
-import Data.String.Interpolate      (i)
-import Data.String.Interpolate.Util (unindent)
-import Data.Maybe (fromMaybe)
+import           Clash.Annotations.Primitive
+import qualified Clash.Explicit.BlockRam        as E
+import           Clash.Prelude
+import           Data.Maybe                     (fromMaybe)
+import           Data.String.Interpolate        (i)
+import           Data.String.Interpolate.Util   (unindent)
+import qualified Heron.Primitives.UltraRamModel as U
 
 {-# ANN dpRamE# (InlineYamlPrimitive [Verilog] $ unindent [i|
  BlackBox:
-    name: Heron.Xilinx.DualPortRam.dpRamE#
+    name: Heron.Primitives.DualPortRam.dpRamE#
     kind: Declaration
     type: |-
       dpRamE# ::
@@ -112,6 +113,8 @@ dpRamE# ::
   -> (Signal dom a, Signal dom a)
   -- ^ Outputs data on /next/ cycle. When writing, the data written
   -- will be echoed. When reading, the read data is returned.
+dpRamE# "ultra" clk en weA addrA datA weB addrB datB =
+  U.trueDualPortBlockRam# clk en weA addrA datA clk en weB addrB datB
 dpRamE# !_ clk en weA addrA datA weB addrB datB =
   -- unbundle . (\rest -> (errorX "Uninitialised UltraRam data") :- rest) . bundle $
   E.trueDualPortBlockRam# clk en weA addrA datA clk en weB addrB datB
@@ -139,19 +142,12 @@ dpRamE ::
   -- previous data is latched.
 dpRamE arch clk en opA opB =
   dpRamE# (show arch) clk (fromEnable en)
-    (isWr <$> opA) (getAddr <$> opA) (getData <$> opA)
-    (isWr <$> opB) (getAddr <$> opB) (getData <$> opB)
+    (isWr <$> opA) (maybeToX . getAddr <$> opA) (maybeToX . getData <$> opA)
+    (isWr <$> opB) (maybeToX . getAddr <$> opB) (maybeToX . getData <$> opB)
   where
     isWr (RamWrite _ _) = True
     isWr _              = False
-
-    getAddr (RamWrite a _) = a
-    getAddr (RamRead  a  ) = a
-    getAddr RamNoOp        = undefined
-
-    getData (RamWrite _ d) = d
-    getData (RamRead  _  ) = undefined
-    getData RamNoOp        = undefined
+    maybeToX = fromMaybe undefined
 
 -- | A Xilinx dual-port memory primitive with hidden clock, reset, and enable
 dpRam ::
@@ -185,62 +181,9 @@ instance Show RamArch where
 getAddr :: KnownNat n => RamOp n a -> Maybe (Index n)
 getAddr (RamWrite addr _) = Just addr
 getAddr (RamRead  addr  ) = Just addr
-getAddr _ = Nothing
+getAddr _                 = Nothing
 
-getSelIndex :: forall n
-             . (KnownNat n, 1<=n, 1<= n `Div` 4096)
-            => Index n -> Index (n `Div` 4096)
-getSelIndex addr = unpack .  resize $ pack addr .&. pack mask
-  where
-    mask :: Index n
-          = maxBound
-
-shortRamOp :: forall n a
-            . (KnownNat n, 1<=n, 1<= n `Div` 4096)
-           => RamOp n a -> RamOp 4096 a
-shortRamOp op = go op
-  where
-    go RamNoOp           = RamNoOp
-    go (RamRead addr)    = RamRead  (short addr)
-    go (RamWrite addr x) = RamWrite (short addr) x
-    short :: Index n -> Index 4096
-    short addr = unpack . resize $
-                 shiftR (pack addr) (snatToNum $ SNat @(CLog 2 (n `Div` 4096)))
-
--- | An UltraRAM-based memory with external cascade logic. Constructs a parallel
---   set of \( n\times4K \) UlraRam blocks, where \( n \) is inferred by the
---   desired memory depth.
---
---   For particularly deep memories, this usually gives better timing at the
---   cost of extra LUTs. Something equivalent may be possible with
---   'CASCADE_HEIGHT' attributes in generated HDL.
-deepUltraRam ::
-  forall nAddrs dom1 a .
-  ( KnownNat nAddrs
-  , HiddenClockResetEnable dom1
-  , NFDataX a
-  , 1 <= nAddrs `Div` 4096
-  , 1 <= nAddrs
-  )
-  => Signal dom1 (RamOp nAddrs a)
-  -- ^ RAM operation for port A
-  -> Signal dom1 (RamOp nAddrs a)
-  -- ^ RAM operation for port B
-  -> (Signal dom1 a, Signal dom1 a)
-  -- ^ Data outputs. When reading, the read data is returned. When writing, the
-  -- previous data is latched.
-deepUltraRam a b = dataOut
-  where
-    nRams   = SNat @(nAddrs `Div` 4096)
-    logRams = clogBaseSNat d2 nRams
-    selA = (fromMaybe 0 . fmap getSelIndex . getAddr) <$> a
-    selB = (fromMaybe 0 . fmap getSelIndex . getAddr) <$> b
-    selA' = delay 0 selA
-    selB' = delay 0 selB
-    shortA = shortRamOp <$> a
-    shortB = shortRamOp <$> b
-    aCtrls = unbundle $ (\d i -> replace i d $ replicate nRams $ RamNoOp) <$> shortA <*> selA
-    bCtrls = unbundle $ (\d i -> replace i d $ replicate nRams $ RamNoOp) <$> shortB <*> selB
-    outs   = bundle $ zipWith (\x y -> bundle $ dpRam UltraRam x y) aCtrls bCtrls
-    dataOut = ( (\os i -> fst (os !! i)) <$> outs <*> selA'
-              , (\os i -> snd (os !! i)) <$> outs <*> selB')
+getData :: RamOp n a -> Maybe a
+getData (RamWrite _ d) = Just d
+getData (RamRead  _  ) = Nothing
+getData RamNoOp        = Nothing

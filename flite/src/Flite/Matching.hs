@@ -4,9 +4,11 @@ import Flite.Syntax
 import Flite.Traversals
 import Flite.Descend
 import Flite.Fresh
+import Flite.Pretty
 import Data.List
 import Data.Maybe
 import Control.Monad
+import Debug.Trace
 
 desugarEqn :: Prog -> Fresh Prog
 desugarEqn p = mapM (\(f, arity, qs) ->
@@ -60,17 +62,21 @@ type Equation = ([Pat], Exp)
 isWld :: Equation -> Bool
 isWld (Wld:ps, e) = True
 isWld (Var v:ps, e) = False
+isWld (     Con c      :ps, e) = False
 isWld (App (Con c) args:ps, e) = False
+isWld (p:ps, e) = error $ "IsWld doesn't handle: "  ++ show p
 
 isVar :: Equation -> Bool
 isVar (Wld:ps, e) = False
 isVar (Var v:ps, e) = True
+isVar (     Con c      :ps, e) = False
 isVar (App (Con c) args:ps, e) = False
 
 isCon :: Equation -> Bool
 isCon e = not (isVar e)
 
 getCon :: Equation -> (Id, [Pat])
+getCon (     Con c      :ps, e) = (c, []  )
 getCon (App (Con c) args:ps, e) = (c, args)
 
 match :: [Id] -> [Equation] -> Fresh Exp
@@ -95,5 +101,8 @@ groupEqns (q:qs)
 matchClause :: [Id] -> (Id, Int, [Equation]) -> Fresh Alt
 matchClause us (c, arity, qs) =
   do us' <- mapM (\_ -> fresh) [1..arity]
-     alts <- match (us' ++ us) [(ps' ++ ps, e) | (App (Con c) ps':ps, e) <- qs]
+     alts <- match (us' ++ us) [(getSubPats p ++ ps, e) | (p:ps, e) <- qs]
      return (App (Con c) (map Var us'), alts)
+  where
+    getSubPats (Con c) = []
+    getSubPats (App (Con c) ps') = ps'

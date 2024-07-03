@@ -9,31 +9,7 @@
     and will appear as constants in the documentation. ¯\\_(ツ)_/¯
 -}
 module Heron.Template
-  (
-  -- * Configuration
-  -- ** Template Dimensions
-    MaxAps
-  , MaxPush
-  , NodeLen
-  , CMaxPush
-  , Log2MaxPush
-  , MaxRegs
-
-  -- ** Memory Depths
-  , VStkSize
-  , AStkSize
-  , UStkSize
-  , PStkSize
-  , HeapSize
-  , RomSize
-
-  -- ** Field Widths
-  , TagW
-  , IntW
-  , ShortTagW
-  , ShortIntW
-  , MaxArgs
-  , Len
+  (Len
 
   -- ** Field Definitions
   , OpCode(..)
@@ -51,7 +27,6 @@ module Heron.Template
   , IsSwapped
   , IsShared
   , IsNF
-  , IsCollected
   , IsFirst
 
   -- * Template Representation
@@ -86,6 +61,7 @@ module Heron.Template
   , isShared
   , heapAddr
   , atomArity
+  , appLen
   , rawAdd
   , canGC
   , altPushOffset
@@ -103,55 +79,14 @@ module Heron.Template
 
   ) where
 
-import Heron.TemplateTH
-import Clash.Prelude hiding (msb)
-import Clash.Annotations.BitRepresentation
-import Clash.Annotations.BitRepresentation.Deriving
+import           Clash.Annotations.BitRepresentation.Deriving
+import           Clash.Prelude                                hiding (msb)
+import           Heron.Parameters
 
-import qualified Prelude as P
+import qualified Prelude                                      as P
 
 -- Compile-time `Natural` parameters
 ---- Main parameters
--- | Maximum applications per template
-type MaxAps      = __MaxAps__
--- | Maximum length for template's heap applications
-type NodeLen     = __NodeLen__
--- | Maximum length for template's spinal application
-type MaxPush     = __MaxPush__
--- | Synonym for \( \lceil\log_2 \mathtt{MaxPush} \rceil \), used in efficient power-of-two
---   parallel stack implementation
-type Log2MaxPush = CLog 2 __MaxPush__
--- | Synonym for \( 2^{\lceil\log_2 \mathtt{MaxPush} \rceil} \), used for efficient power-of-two
---   parallel stack implementation
-type CMaxPush    = 2 ^ Log2MaxPush
--- | Maximum number of primitive registers per core
-type MaxRegs     = __MaxRegs__
-
----- Memory depths
--- | Depth of primary /v/alue stack
-type VStkSize   = __VStkSize__
--- | Depth of case table /a/lternatives stack
-type AStkSize   = __AStkSize__
--- | Depth of /u/pdate pointer stack
-type UStkSize   = __UStkSize__
--- | Depth of /p/pdate stack
-type PStkSize   = __PStkSize__
--- | Depth of heap memory
-type HeapSize   = __HeapSize__
--- | Depth of template memory
-type RomSize    = __RomSize__
-
----- Field widths
--- | Constructor tag width
-type TagW       = __TagW__
--- | Primitive integer width
-type IntW       = __IntW__
--- | Short constructor tag width (for inline case tables)
-type ShortTagW  = __ShortTagW__
--- | Short primitive integer width (for inline case tables)
-type ShortIntW  = __ShortIntW__
--- | Maximum arity for any template
-type MaxArgs    = __MaxArgs__
 
 
 --------------------------------------------------------------------------------
@@ -185,11 +120,8 @@ type IsSwapped   = Bool
 -- | Is this node possibly shared (and will need updating with its normal
 -- form)?
 type IsShared    = Bool
--- | Is this node already in its normal form?
+-- | Is this node already in its normal form? TODO Is storing this any better than
 type IsNF        = Bool
--- | Has this node already been marked for garbage collection (not yet
--- implemented!)
-type IsCollected = Bool
 -- | Is this template the first in a series of split templates?
 type IsFirst     = Bool
 
@@ -228,6 +160,9 @@ data Atom
 -- TODO Try making the atom bit pack use one-hot _only_ on stack. Might speed up
 -- our control logic?
 
+instance Default Atom where
+  def = PrimInt 0
+
 -- | /Inline/ case alternatives
 data Alt
   = AFun         TemplAddr
@@ -238,27 +173,27 @@ data Alt
   -- ^ Constructor tag
   | AArg FnArity ArgIndex
   -- ^ Argument pointer
-  deriving (Eq, Show, Generic, NFDataX, ShowX, Lift)
+  deriving (Eq, Show, Generic, NFDataX, ShowX, Lift, BitPack)
 
--- TODO This should be generated with TH. Clash's derivePackedAnnotation sounds
--- equivalent but it doesn't seem to work for me.
-{-# ANN module (
-      let { ta = snatToNum (SNat @(BitSize TemplAddr));
-            fa = snatToNum (SNat @(BitSize FnArity));
-            si = snatToNum (SNat @(BitSize ShortInt));
-            st = snatToNum (SNat @(BitSize ShortTag));
-            ai = snatToNum (SNat @(BitSize ArgIndex));
-            msb = pred . fromIntegral $ P.maximum $
-                   P.zipWith (+) [1..] $
-                   P.map P.sum [[ta],[fa, si],[fa, fa, st],[fa, ai]]
-      }
-      in DataReprAnn $(liftQ [t|Alt|]) (msb+1)
-           [ConstrRepr 'AFun (bitmask msb 1) (shiftL 1 (msb-0)) (fieldmasks [ta])
-           ,ConstrRepr 'AInt (bitmask msb 2) (shiftL 1 (msb-1)) (fieldmasks [fa, si])
-           ,ConstrRepr 'ACon (bitmask msb 3) (shiftL 1 (msb-2)) (fieldmasks [fa, fa, st])
-           ,ConstrRepr 'AArg (bitmask msb 4) (shiftL 1 (msb-3)) (fieldmasks [fa, ai])
-           ]) #-}
-deriveBitPack [t| Alt |]
+-- -- TODO This should be generated with TH. Clash's derivePackedAnnotation sounds
+-- -- equivalent but it doesn't seem to work for me.
+-- {-# ANN module (
+--       let { ta = snatToNum (SNat @(BitSize TemplAddr));
+--             fa = snatToNum (SNat @(BitSize FnArity));
+--             si = snatToNum (SNat @(BitSize ShortInt));
+--             st = snatToNum (SNat @(BitSize ShortTag));
+--             ai = snatToNum (SNat @(BitSize ArgIndex));
+--             msb = pred . fromIntegral $ P.maximum $
+--                    P.zipWith (+) [1..] $
+--                    P.map P.sum [[ta],[fa, si],[fa, fa, st],[fa, ai]]
+--       }
+--       in DataReprAnn $(liftQ [t|Alt|]) (msb+1)
+--            [ConstrRepr 'AFun (bitmask msb 1) (shiftL 1 (msb-0)) (fieldmasks [ta])
+--            ,ConstrRepr 'AInt (bitmask msb 2) (shiftL 1 (msb-1)) (fieldmasks [fa, si])
+--            ,ConstrRepr 'ACon (bitmask msb 3) (shiftL 1 (msb-2)) (fieldmasks [fa, fa, st])
+--            ,ConstrRepr 'AArg (bitmask msb 4) (shiftL 1 (msb-3)) (fieldmasks [fa, ai])
+--            ]) #-}
+-- deriveBitPack [t| Alt |]
 
 -- | An expanded verion of `Alt`. Under the hood, the bit representation uses a
 --   one-hot encoding for constructor tags, making decode logic a bit faster.
@@ -287,11 +222,11 @@ altPushOffset a =
 
 -- | Heap nodes, indexed by max `App` application length and max `Case` application length
 data Node nApp nCase
-  = Case (CaseTable Alt) (Len nCase) IsCollected (Vec nCase (Maybe Atom))
+  = Case (CaseTable Alt) (Len nCase) (Vec nCase (Maybe Atom))
   -- ^ Application describing a case subject with case table for alternatives
-  | App  IsNF            (Len nApp ) IsCollected (Vec nApp  (Maybe Atom))
+  | App  IsNF            (Len nApp ) (Vec nApp  (Maybe Atom))
   -- ^ Plain application
-  | Prim RegIndex        (Len 3    ) IsCollected (Vec  3    (Maybe Atom))
+  | Prim RegIndex        (Len 3    ) (Vec  3    (Maybe Atom))
   -- ^ Primitive operation application (for PRS scheme)
   deriving (Eq, Show, Generic, NFDataX, ShowX, Lift, BitPack)
 
@@ -331,12 +266,12 @@ data Template
 -- | Map a function over `Atom`s in a `Node`.
 mapNode :: (KnownNat n, KnownNat m) =>
            (Atom -> Atom) -> Node n m -> Node n m
-mapNode f (Case alt arity col as)
-  = Case alt arity col (map (fmap f) as)
-mapNode f (App isNF arity col as)
-  = App isNF arity col (map (fmap f) as)
-mapNode f (Prim reg arity col as)
-  = Prim reg arity col (map (fmap f) as)
+mapNode f (Case alt arity as)
+  = Case alt arity (map (fmap f) as)
+mapNode f (App isNF arity as)
+  = App isNF arity (map (fmap f) as)
+mapNode f (Prim reg arity as)
+  = Prim reg arity (map (fmap f) as)
 
 -- | Map a function over `Atom`s in a `Template`.
 mapTemplate :: (Atom -> Atom) -> Template -> Template
@@ -345,27 +280,27 @@ mapTemplate f (Template po s as)
 
 -- | Unpack a `Node` to an `UnpackedNode`
 unpackNode
-  :: forall nApp nCase nMax
+  :: forall nMax nApp nCase
    . ( KnownNat nApp, KnownNat nCase, KnownNat nMax
      , nApp <= nMax, nCase <= nMax, 3 <= nMax )
   => Bool -> Node nApp nCase -> UnpackedNode nMax
-unpackNode shared (Case ct  arity _ as) =
+unpackNode shared (Case ct  arity as) =
   UnpackedNode shared (resize arity) (leToPlus @nCase @nMax $ as ++ repeat Nothing) (Just $ unpackCaseTable ct) Nothing
-unpackNode shared (App isNF arity _ as) =
+unpackNode shared (App isNF arity as) =
   UnpackedNode (shared && not isNF) (resize arity) (leToPlus @nApp @nMax $ as ++ repeat Nothing) Nothing Nothing
-unpackNode shared (Prim reg arity _ as) =
+unpackNode shared (Prim reg arity as) =
   UnpackedNode shared (resize arity) (leToPlus @3 @nMax $ as ++ repeat Nothing) Nothing (Just reg)
 
 -- | Unpack a `CaseTable Alt` to an `CaseTable UnpackedAlt`
 unpackCaseTable :: CaseTable Alt -> CaseTable UnpackedAlt
 unpackCaseTable (CTOffset addr) = CTOffset addr
-unpackCaseTable (CTInline x y) = CTInline (unpackAlt x) (unpackAlt y)
+unpackCaseTable (CTInline x y)  = CTInline (unpackAlt x) (unpackAlt y)
 
 -- | Unpack a `Alt` to an `UnpackedAlt`
 unpackAlt :: Alt -> UnpackedAlt
-unpackAlt (AFun addr) = UAFun addr
-unpackAlt (AInt pop val) = UAInt pop val
-unpackAlt (AArg pop idx) = UAArg pop idx
+unpackAlt (AFun addr)          = UAFun addr
+unpackAlt (AInt pop val)       = UAInt pop val
+unpackAlt (AArg pop idx)       = UAArg pop idx
 unpackAlt (ACon pop arity tag) = UACon pop arity tag
 
 -- | Constructor tag for `False`
@@ -378,16 +313,20 @@ trueAtom = Con 0 1
 
 -- | Translation from Haskell `Bool`s to Heron `Atom` encoding
 fromBool :: Bool -> Atom
-fromBool True = trueAtom
+fromBool True  = trueAtom
 fromBool False = falseAtom
+
+-- | Get number of atoms in an application
+appLen :: Vec NodeLen (Maybe Atom) -> Len NodeLen
+appLen = fold (+) . map (maybe 0 (const 1))
 
 -- | Get the arity implied by an `Atom`
 atomArity :: Atom -> FnArity
-atomArity (Fun arity _ _) = arity
+atomArity (Fun arity _ _)    = arity
 atomArity (PrimOp arity _ _) = arity
-atomArity (PrimInt   _) = 1
-atomArity (Con arity _) = 1+arity
-atomArity _ = 0
+atomArity (PrimInt   _)      = 1
+atomArity (Con arity _)      = 1+arity
+atomArity _                  = 0
 
 -- | Is this `Atom` a `PrimInt`?
 isInt :: Atom -> Bool
@@ -401,18 +340,18 @@ isCon _         = False
 
 -- | Does this `Atom` point to something possibly-shared?
 isShared :: Atom -> Bool
-isShared (Fun _ _ _)    = False
-isShared (PrimOp _ _ _) = False
-isShared (Ptr sh _)     = sh
-isShared (PrimInt   _)  = False
-isShared (Con _ _)      = False
-isShared (Arg s _)      = s
-isShared (Reg s _)      = s
+isShared (Fun {})      = False
+isShared (PrimOp {})   = False
+isShared (Ptr sh _)    = sh
+isShared (PrimInt   _) = False
+isShared (Con {})      = False
+isShared (Arg s _)     = s
+isShared (Reg s _)     = s
 
 -- | Maybe return a `HeapAddr` pointed to by this `Atom`
 heapAddr :: Atom -> Maybe HeapAddr
-heapAddr (Ptr _    a)  = Just a
-heapAddr _             = Nothing
+heapAddr (Ptr _    a) = Just a
+heapAddr _            = Nothing
 
 -- | Addition for `Index` using raw bits. Our relative `Ptr` addresses might be
 -- negative and the raw interpretation is needed to avoid `Index` bound checks.
@@ -428,14 +367,14 @@ canGC _               = True
 
 -- | Mark this `Atom` as possibly-shared
 dash :: Atom -> Atom
-dash (Ptr _ addr) = Ptr True addr
+dash (Ptr _ addr)  = Ptr True addr
 dash (Arg _ index) = Arg True index
 dash (Reg _ index) = Reg True index
-dash a = a
+dash a             = a
 
 -- | Conditionally mark this `Atom` as possibly-shared
 dashIf :: Bool -> Atom -> Atom
-dashIf True = dash
+dashIf True  = dash
 dashIf False = id
 
 --------------------------------------------------------------------------------
@@ -446,42 +385,39 @@ ppVec ind f = foldl (\str a -> str P.++ ind P.++ f a P.++ "\n") ""
 
 -- | Pretty print a `Node`
 ppNode :: (KnownNat n, KnownNat m) => String -> Node n m -> String
-ppNode ind (Case alt arity collected as)
-  = P.unlines (P.map ((P.++) ind)
+ppNode ind (Case alt arity as)
+  = P.unlines (P.map (ind P.++)
                  [ "Case to " P.++ show alt
                  , "  Arity = " P.++ show arity
-                 , "  Collected = " P.++ show collected
                  , "  Atoms ->"
                  ]) P.++ ppVec ("           " P.++ ind) show as
-ppNode ind (App isNF arity collected as)
-  = P.unlines (P.map ((P.++) ind)
+ppNode ind (App isNF arity as)
+  = P.unlines (P.map (ind P.++)
                  [ "App " P.++ (if isNF then "NF" else "Thunk")
                  , "  Arity = " P.++ show arity
-                 , "  Collected = " P.++ show collected
                  , "  Atoms ->"
                  ]) P.++ ppVec ("           " P.++ ind) show as
-ppNode ind (Prim reg arity collected as)
-  = P.unlines (P.map ((P.++) ind)
+ppNode ind (Prim reg arity as)
+  = P.unlines (P.map (ind P.++)
                  [ "PrimRedex to " P.++ show reg
                  , "  Arity = " P.++ show arity
-                 , "  Collected = " P.++ show collected
                  , "  Atoms ->"
                  ]) P.++ ppVec ("           " P.++ ind) show as
 
 -- | Pretty print a `Maybe Node`
 ppNodeM :: (KnownNat n, KnownNat m) => String -> Maybe (Node n m) -> String
 ppNodeM ind (Just n) = ppNode ind n
-ppNodeM _ Nothing  = ""
+ppNodeM _ Nothing    = ""
 
 -- | Pretty print a `Template`
 ppTemplate :: String -> Template -> String
 ppTemplate ind t
-  = P.unlines (P.map ((P.++) ind)
+  = P.unlines $ P.map (ind P.++)
       [ "Template ->"
       , "  Offset" P.++ show (tPushOffset t)
-      , "  SpineAp ->\n" P.++ (ppNode (ind P.++ "             ")
-                                      (tSpine t))
-      , "  HeapAps ->\n" P.++ (ppVec  (ind P.++ "             ")
-                                      (ppNodeM (ind P.++ "             "))
-                                      (tAps t))
-      ])
+      , "  SpineAp ->\n" P.++ ppNode (ind P.++ "             ")
+                                     (tSpine t)
+      , "  HeapAps ->\n" P.++ ppVec  (ind P.++ "             ")
+                                     (ppNodeM (ind P.++ "             "))
+                                     (tAps t)
+      ]

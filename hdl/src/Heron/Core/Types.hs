@@ -1,6 +1,6 @@
+{-# LANGUAGE DataKinds              #-}
+{-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleInstances #-}
 
 {-| Shared types for Heron Core components -}
 module Heron.Core.Types where

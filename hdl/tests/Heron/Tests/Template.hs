@@ -11,21 +11,21 @@ members is easy.
 
 module Heron.Tests.Template where
 
-import Prelude hiding (read)
-import qualified Clash.Prelude as C
-import Clash.Hedgehog.Sized.Vector
+import           Clash.Hedgehog.Sized.Vector
+import qualified Clash.Prelude               as C
+import           Prelude                     hiding (read)
 
-import Test.Tasty
-import Test.Tasty.TH
-import Test.Tasty.Hedgehog
+import           Test.Tasty
+import           Test.Tasty.Hedgehog
+import           Test.Tasty.TH
 
-import Hedgehog ((===))
-import qualified Hedgehog as H
-import qualified Hedgehog.Gen as Gen
-import GHC.TypeNats
+import           GHC.TypeNats
+import           Hedgehog                    ((===))
+import qualified Hedgehog                    as H
+import qualified Hedgehog.Gen                as Gen
 
-import Heron.Template
-import Heron.Core.Core
+import           Heron.Core.Core
+import           Heron.Template
 
 ge :: (H.MonadGen m, Enum a, Bounded a) => m a
 ge = Gen.enumBounded
@@ -63,9 +63,9 @@ genCaseTable = Gen.choice
 
 genNode :: (KnownNat a, KnownNat b) => H.Gen (Node a b)
 genNode = Gen.choice
-  [ Case <$> genCaseTable <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
-  , App  <$> ge           <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
-  , Prim <$> ge           <*> ge <*> ge <*> genVec (Gen.maybe genAtom)
+  [ Case <$> genCaseTable <*> ge <*> genVec (Gen.maybe genAtom)
+  , App  <$> ge           <*> ge <*> genVec (Gen.maybe genAtom)
+  , Prim <$> ge           <*> ge <*> genVec (Gen.maybe genAtom)
   ]
 
 genTemplate :: H.Gen Template

@@ -9,6 +9,13 @@ import Flite.Fresh
 funcs :: Prog -> [String]
 funcs p = [f | Func f args rhs <- p]
 
+onPats :: (Exp -> Exp) -> Prog -> Prog
+onPats f p = [Func g (map f args) (onAlts f rhs) | Func g args rhs <- p]
+  where
+    onAlts f (Case e as) = Case (onAlts f e) (map (doAlts f) as)
+    onAlts f e = descend f e
+    doAlts f (p,e) = (f p, onAlts f e)
+
 onExp :: (Exp -> Exp) -> Prog -> Prog
 onExp f p = [Func g args (f rhs) | Func g args rhs <- p]
 

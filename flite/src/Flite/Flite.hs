@@ -17,7 +17,7 @@ import System.Console.GetOpt
 data Flag =
     Desugar
   | Translate
-  | CompileToTemplates Int Int Int Int Int
+  | CompileToTemplates Int Int Int Int Int Int
   | InlineH (Maybe Int)
   | StrictnessAnalysis
   | InlineI (Maybe Int)
@@ -34,7 +34,7 @@ options :: [OptDescr Flag]
 options =
   [ Option ['d'] [] (NoArg Desugar) "desugar"
   , Option ['t'] [] (NoArg Translate) "translate"
-  , Option ['r'] [] (OptArg red "MAXPUSH:APSIZE:MAXAPS:MAXLUTS:MAXREGS")
+  , Option ['r'] [] (OptArg red "MAXPUSH:APSIZE:MAXAPS:MAXLUTS:MAXREGS:MAXAPSPAN")
                     "compile to Heron templates"
   , Option ['h'] [] (OptArg (InlineH . fmap read) "MAXAPS")
                     "inline small function bodies early"
@@ -44,12 +44,12 @@ options =
   , Option ['v'] [] (NoArg VerboseResult) "show the integer result from main"
   ]
   where
-    redDefaults = CompileToTemplates 6 4 2 1 8
+    redDefaults = CompileToTemplates 6 4 2 1 8 8
     red Nothing = redDefaults
     red (Just s) =
       case split ':' s of
-        [a, b, c, d, e] ->
-          CompileToTemplates (read a) (read b) (read c) (read d) (read e)
+        [a, b, c, d, e, f] ->
+          CompileToTemplates (read a) (read b) (read c) (read d) (read e) (read f)
         _ -> error (usageInfo header options)
 
 header = "Usage: Flite [OPTION...] FILE.hs \n"
@@ -76,8 +76,8 @@ run flags fileName =
          putStrLn $ PH.pretty p
        [Desugar] ->
          putStrLn $ pretty $ frontend sa maxBound (inlineFlagH, inlineFlagI) p
-       [CompileToTemplates slen alen napps nluts nregs] ->
-         mapM_ print $ redCompile (inlineFlagH, inlineFlagI) sa slen alen napps nluts nregs p
+       [CompileToTemplates slen alen napps nluts nregs aspan] ->
+         mapM_ print $ redCompile (inlineFlagH, inlineFlagI) sa slen alen napps nluts nregs aspan p
        _ -> error (usageInfo header options)
 
 -- Auxiliary

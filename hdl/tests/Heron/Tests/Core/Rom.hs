@@ -1,24 +1,24 @@
 module Heron.Tests.Core.Rom where
 
-import Prelude hiding (read)
-import qualified Clash.Prelude as C
-import Clash.Hedgehog.Sized.Vector
+import           Clash.Hedgehog.Sized.Vector
+import qualified Clash.Prelude               as C
+import           Prelude                     hiding (read)
 
-import Test.Tasty
-import Test.Tasty.TH
-import Test.Tasty.Hedgehog
+import           Test.Tasty
+import           Test.Tasty.Hedgehog
+import           Test.Tasty.TH
 
-import Hedgehog ((===))
-import qualified Hedgehog as H
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
-import GHC.TypeNats
-import GHC.Natural (Natural)
-import System.IO.Temp
-import System.Directory
-import Clash.Explicit.ROM.File (memFile)
+import           Clash.Explicit.ROM.File     (memFile)
+import           GHC.Natural                 (Natural)
+import           GHC.TypeNats
+import           Hedgehog                    ((===))
+import qualified Hedgehog                    as H
+import qualified Hedgehog.Gen                as Gen
+import qualified Hedgehog.Range              as Range
+import           System.Directory
+import           System.IO.Temp
 
-import Heron.Core.Rom
+import           Heron.Core.Rom
 
 golden :: forall d a
         . C.KnownNat d

@@ -1,7 +1,7 @@
 create_project prj . -force
 
 # Project properties
-set_property board_part em.avnet.com:ultra96v2:part0:1.0 [current_project]
+set_property board_part avnet.com:ultra96v1:part0:1.2 [current_project]
 
 # Setup run
 set_property STEPS.SYNTH_DESIGN.ARGS.RETIMING true [get_runs synth_1]
@@ -17,8 +17,10 @@ set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [
 
 # Add sources
 add_files $env(HERON_VERILOG)
-update_compile_order -fileset sources_1
 set_property top topEntity [current_fileset]
+update_compile_order -fileset sources_1
+#add_files -fileset constrs_1 ./constrs.xdc
+add_files -fileset utils_1 ./rqs
 
 # Make an IP block from our filter sources
 ipx::package_project -root_dir ./ip -vendor user.org -library user -taxonomy /UserIP -import_files -set_current false topEntity
@@ -45,7 +47,7 @@ set_property top design_1_wrapper [current_fileset]
 update_compile_order -fileset sources_1
 
 # Synthesise
-launch_runs impl_1 -jobs 6
+launch_runs impl_1 -jobs 2
 wait_on_run impl_1
 
 # Report

@@ -1,0 +1,34 @@
+sortLe le l = qsort le l Nil ;
+
+sort l = qsort (<=) l Nil ;
+
+-- hf could not translate qsort (non-uniform pattern matching)
+qsort le Nil     r = r ;
+qsort le (Cons x xs) r =
+  case xs of {
+    Nil -> Cons x r ;
+    Cons y ys -> qpart le x xs Nil Nil r l ;
+ } ;
+
+qpart le x Nil rlt rge r = rqsort le rlt (Cons x (rqsort le rge r)) ;
+qpart le x (Cons y ys) rlt rge r =
+  case le x y of {
+    True -> qpart le x ys rlt (Cons y rge) r ;
+    False -> qpart le x ys (Cons y rlt) rge r ;
+    } ;
+
+-- hf could not translate rqsort (non-uniform pattern matching)
+rqsort le Nil     r = r ;
+rqsort le (Cons x xs) r =
+  case xs of {
+    Nil -> Cons x r ;
+    Cons y ys -> rqpart le x xs Nil Nil r l ;
+ } ;
+
+rqpart le x Nil rle rgt r = qsort le rle (Cons x (qsort le rgt r)) ;
+rqpart le x (Cons y ys) rle rgt r =
+  case le y x of {
+    True -> rqpart le x ys (Cons y rle) rgt r ;
+    False -> rqpart le x ys rle (Cons y rgt) r ;
+    } ;
+

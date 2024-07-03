@@ -7,10 +7,12 @@ import Flite.Syntax
 import Flite.Flatten
 import Flite.Frontend
 import Data.List
+import Data.Maybe (fromMaybe)
 import Flite.Traversals
 import Flite.WriterState
 import Flite.Inline
 import Flite.Predex
+import Flite.CommonSubExpr
 import qualified Flite.TemplateSyntax as R
 
 import Flite.Pretty
@@ -59,26 +61,70 @@ splitSpine n ((v, app):rest) = (spine, rest, luts)
     spine = filter (not . isAlts) app
     luts = filter isAlts app
 
+-- Given a set of applications, ensure applications are defined
+-- before their use, and sorted by their appearance in the spine.
+apReorder :: Int -> App -> [Id] -> [(Id, App)] -> [(Id, App)]
+apReorder n s bs apps = case groupApps apps of
+  [] -> []
+  (as:rest) -> let nodeps = sortBy spineCmp $ sortBy worstSpan as
+                   here = take 1 nodeps
+                   there = drop 1 nodeps ++ concat rest
+               in here ++ apReorder n s (map fst here ++ bs) there
+  where
+    span (Var v) = fromMaybe 0 $ findIndex (==v) bs
+    span _       = minBound
+    worstSpan a b = compare (maximum . map span $ snd b)
+                            (maximum . map span $ snd a)
+
+    spinePos v = fromMaybe 0 $ findIndex (==Var v) s
+    spineCmp a b = compare (spinePos $ fst a) (spinePos $ fst b)
+
+-- Given a set of applications, ensure applications are defined before their
+-- use, and sorted by their appearance in the spine. FIXME While breaks. Tension
+-- between breadth first traversal of apps dependency graph (never requiring
+-- uninstantiated addresses) and depth first required to keep addresses close in
+-- use. How to fix that?
+apBridgeSpans :: Int -> [(Id, App)] -> [(Id, App)]
+apBridgeSpans aspan [] = []
+apBridgeSpans aspan ((v, app):rest)
+  | worstSpan >= aspan = (v, app) : apBridgeSpans aspan rest'
+  | otherwise = (v, app) : apBridgeSpans aspan rest
+  where
+    worstSpan = case findIndices (any (==Var v)) (map snd rest) of
+                  [] -> 0
+                  is -> 1 + last is
+    v' = "__ind_" ++ v
+    rest' = take (aspan - 1) rest ++ [(v', [Var v])] ++ map (substApp (Var v') v) (drop (aspan - 1) rest)
+    substApp e v (w, app) = (w, map (subst e v) app)
+
+checkApSpans :: Int -> Int -> R.Template -> R.Template
+checkApSpans n aspan t@(f, _, _, s, as)
+  | all withinSpan vars = t
+  | otherwise = error ("App span violation in " ++ f)
+  where
+    vars = filter R.isVAR $ s ++ concatMap R.appAtoms as
+    withinSpan (R.VAR _ v) = v < n && v >= negate aspan
+
 -- Translates a program to Heron templates. Takes the max application length and
 -- max spine length as arguments.
 
-translate :: (InlineFlag, InlineFlag) -> Bool -> Int -> Int -> Int -> Prog -> R.Prog
-translate hi strictAnan n m nregs p = map (trDefn n m nregs p2) p2
+translate :: (InlineFlag, InlineFlag) -> Bool -> Int -> Int -> Int -> Int -> Prog -> R.Prog
+translate hi strictAnan n m nregs aspan p = map (trDefn n m nregs aspan p2) p2
   where
     p0 = frontend strictAnan nregs hi p
-    p1 = [ (f, map getVar args, flatten $ removePredexSpine rhs)
+    p1 = [ (f, map getVar args, elimCommonSubExpr . flatten $ removePredexSpine rhs)
          | Func f args rhs <- p0
          ]
     p2 = lift "main" p1
 
-trDefn n m nregs p (f, args, xs)
+trDefn n m nregs aspan p (f, args, xs)
   | length args >= floor (2 ^ (ceiling $ logBase 2 $ fromIntegral m))
   = error $ "Flite.Compile.trDefn: Arity of " ++ show f ++ " exceeds maximum"
   | otherwise
   = (f, length args, luts, pushs', apps')
   where
     (spine, body, ls) = splitSpine m xs
-    body' = predexReorder nregs $ splitApps n body
+    body' = predexReorder nregs . apBridgeSpans aspan . apReorder n spine [] $ splitApps n body
     d = (f, args, spine, body')
     luts = map (trAlt p d . getAlts) ls
     apps = map (trApp p d . snd) body'
@@ -176,18 +222,19 @@ fr s n m (f, pop, luts, push, apps) =
      let (apps0,apps') = (take n appsHere
                          ,map (relocate (sub offset)) (drop n appsHere ++ appsLater))
 
-     let (push0,push') = if length pushHere <= s && null pushLater -- PREVENT EMPTY SPINES ON LAST TEMPLATE
-                           then ( []
-                                , map (reloc (sub offset)) pushHere)
-                           else ( takeBack (s-1) pushHere
-                                , map (reloc (sub offset)) (pushLater ++ dropBack (s-1) pushHere))
+     let (push0,push') = ( takeBack s' pushHere
+                         , map (reloc (sub offset)) (pushLater ++ dropBack s' pushHere))
      let (luts0,luts') = (takeBack m luts, dropBack m luts)
      t <- frag s n m (f, 0, luts', push', apps')
      write (x, t)
      return (f, pop, luts0, (R.FUN False 0 x : push0), apps0)
   where
     (appsHere, appsLater) = splitPredexes apps
+    -- TODO Order appsHere by appearance in spine, and don't go beyond current template
     (pushHere, pushLater) = splitSpineByPredexes push apps appsHere
+    s' = min (s-1) (fromMaybe maxBound $ findIndex uninst (reverse pushHere))
+    uninst (R.VAR _ i) = i >= n
+    uninst _           = False
 {-
 fr s n m (f, pop, luts, push, apps) =
   do x <- newId
@@ -209,9 +256,9 @@ reloc f x = x
 -- Top-level compilation
 
 redCompile :: (InlineFlag, InlineFlag) -> Bool -> Int -> Int -> Int
-           -> Int -> Int -> Prog -> R.Prog
-redCompile hi strictAnan slen alen napps nluts nregs =
-  fragment slen napps nluts . translate hi strictAnan alen slen nregs
+           -> Int -> Int -> Int -> Prog -> R.Prog
+redCompile hi strictAnan slen alen napps nluts nregs aspan =
+  map (checkApSpans napps aspan) . fragment slen napps nluts . translate hi strictAnan alen slen nregs aspan
 
 -- Auxiliary functions
 

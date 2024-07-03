@@ -1,24 +1,24 @@
 module Heron.Tests.Core.ParStack where
 
-import Prelude hiding (read)
-import qualified Clash.Prelude as C
-import qualified Clash.Sized.Vector as CV
-import Control.Monad
-import Data.Maybe (catMaybes, isJust)
+import qualified Clash.Prelude              as C
+import qualified Clash.Sized.Vector         as CV
+import           Control.Monad
+import           Data.Maybe                 (catMaybes)
+import           Prelude                    hiding (read)
 
-import Test.Tasty
-import Test.Tasty.TH
-import Test.Tasty.Hedgehog
+import           Test.Tasty
+import           Test.Tasty.Hedgehog
+import           Test.Tasty.TH
 
-import Hedgehog ((===))
-import qualified Hedgehog as H
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
-import GHC.TypeNats
-import GHC.Natural (Natural)
+import           Clash.Hedgehog.Sized.Index
+import           GHC.Natural                (Natural)
+import           GHC.TypeNats
+import           Hedgehog                   ((===))
+import qualified Hedgehog                   as H
+import qualified Hedgehog.Gen               as Gen
+import qualified Hedgehog.Range             as Range
 
-import Heron.Core.ParStack
-import Heron.Core.Types
+import           Heron.Core.ParStack
 
 -- Generate a single valid stack command
 genStackInput :: forall p a .
@@ -64,22 +64,23 @@ genStackInputs range genA = do
 
 golden :: forall p a .
           ( C.KnownNat p
+          , C.BitPack a
           )
-       => [Maybe (Offset p, C.Vec (2 C.^ p) (Maybe a))] -> [C.Vec (2 C.^ p) (Maybe a)]
+       => [Maybe (Offset p, C.Vec (2 C.^ p) (Maybe a))] -> [C.Vec (2 C.^ p) a]
 golden ins = map top' $ scanl go [] ins
   where
     go stk Nothing = stk
     go stk (Just (offset, pushes))
-      = let news = filter isJust $ C.toList pushes
+      = let news = catMaybes $ C.toList pushes
         in news ++ drop (length news - fromIntegral offset) stk
     p' = C.snatToNum (C.SNat @(2 C.^ p))
     top' stk = let xs = take p' stk
-                   xs' = xs ++ replicate (p' - length xs) Nothing
+                   xs' = xs ++ replicate (p' - length xs) (C.unpack 0)
                in CV.unsafeFromList xs'
 
 prop_ParStackGolden :: H.Property
 prop_ParStackGolden = H.withShrinks 0  $
-                      H.withTests 1000 $
+                      H.withTests 2000 $
                       H.property $ do
   depth :: Natural
         <- H.forAll $ Gen.integral (Range.linear (1 :: Natural) 1024)
@@ -106,6 +107,9 @@ prop_ParStackGolden = H.withShrinks 0  $
                         C.SNatGT -> error "Invalid ParStack config: log_2 d < p"
                         C.SNatLE -> go (C.SNat @p) (C.SNat @d)
   where
+    maskX sp s = let takeN :: Int
+                            = min (fromIntegral $ _size s) (C.snatToNum $ C.pow2SNat sp)
+                 in C.imap (\i x -> if fromIntegral i >= takeN then C.unpack 0 else x) (_tops s)
     go :: forall p d
         . ( C.KnownNat p
           , C.KnownNat d
@@ -117,18 +121,22 @@ prop_ParStackGolden = H.withShrinks 0  $
     go sp sd = do
            -- Avoid overflows by limiting cycles
            let numCycles = Range.linear 1 ((C.snatToNum sd) `div` (2::Int) ^ (C.snatToInteger sp))
-           inps <- H.forAll (genStackInputs numCycles Gen.alpha)
-
+           let elemGen = genIndex (Range.linear minBound maxBound) :: H.Gen (C.Index 16)
+           inps <- H.forAll (genStackInputs numCycles elemGen)
            -- Simulate
-           let want = golden @p inps
-           let got = take (1 + length inps) $
+           let want = take (length inps) $ golden @p inps
+           let got  = take (length inps) $
                      drop 1 $
+                     map (maskX sp) $
                      (C.simulate @C.System
-                        (fmap read . newCachedParStack @p @d)
+                        (flip (newParStack @p @d) (pure 0))
                         (Nothing : inps ++ repeat Nothing))
            got === want
 
 -- FIXME Should we allow offsets of +p? Just now it's -p -> p-1
+
+-- TODO We need tests for the override mode used during GC's root
+-- identification phase.
 
 tests :: TestTree
 tests = $(testGroupGenerator)

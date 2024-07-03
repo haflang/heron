@@ -9,16 +9,20 @@ module Heron.Core.Rom
   , Rom
   ) where
 
-import Clash.Prelude
+import           Clash.Prelude
 
+-- | ROM address type indexed by depth
 type RomAddr d = Index d
 
+-- | ROM input is just a read address
 type RomIn d
   = RomAddr d
 
+-- | ROM output is a read value of type @a@.
 type RomOut a
   = a
 
+-- | Full ROM type
 type Rom dom a d = Signal dom (RomIn d) -> Signal dom (RomOut a)
 
 -- | Generate a new ROM

@@ -1,190 +1,182 @@
-{
+min m n = if m <= n then m else n
+max m n = if m <= n then n else m
+gt  m n = if m <= n then False else True
 
-min m n = case ((<=) m n) of { True -> m ; False -> n ; } ;
+head (x : xs) = x
 
-max m n = case ((<=) m n) of { True -> n ; False -> m ; } ;
+last (x : xs) = if null xs then x else last xs
 
-gt  m n = case ((<=) m n) of { True -> False ; False -> True ; } ;
+null []       = True
+null (x : xs) = False
 
-head (Cons x xs) = x ;
+length xs = lengthAcc 0 xs
 
-last (Cons x xs) = case null xs of {
-                   True  -> x ;
-                   False -> last xs ;
-                   } ;
+lengthAcc acc [] = acc
+lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
 
-null Nil         = True ;
-null (Cons x xs) = False ;
+append []       ys = ys
+append (x : xs) ys = x : append xs ys
 
-length xs = lengthAcc 0 xs;
+map f []         = []
+map f (x : xs) = f x : map f xs
 
-lengthAcc acc Nil = acc;
-lengthAcc acc (Cons x xs) = lengthAcc ((+) acc 1) xs;
+concatMap f []       = []
+concatMap f (x : xs) = append (f x) (concatMap f xs)
 
-append Nil         ys = ys ;
-append (Cons x xs) ys = Cons x (append xs ys) ;
+elem x []       = False
+elem x (y : ys) =
+  if x == y
+    then True
+    else elem x ys
 
-map f Nil         = Nil ;
-map f (Cons x xs) = Cons (f x) (map f xs) ;
+foldr f z []       = z
+foldr f z (x : xs) = f x (foldr f z xs)
 
-concatMap f Nil         = Nil ;
-concatMap f (Cons x xs) = append (f x) (concatMap f xs) ;
-
-elem x Nil         = False ;
-elem x (Cons y ys) =
-  case (==) x y of { True -> True ; False -> elem x ys ; } ;
-
-foldr f z Nil         = z ;
-foldr f z (Cons x xs) = f x (foldr f z xs) ;
-
-filter p Nil         = Nil ;
-filter p (Cons x xs) =
-  case p x of { True -> Cons x (filter p xs) ; False -> filter p xs ; } ;
+filter p []       = []
+filter p (x : xs) =
+  if p x
+    then x : (filter p xs)
+    else filter p xs
 
 enumFromTo m n =
-  case (<=) m n of { True -> Cons m (enumFromTo ((+) m 1) n) ; False -> Nil ; } ;
+  if m <= n
+    then m : (enumFromTo ((+) m 1) n)
+    else []
 
-assoc x (Cons (Pair y z) yzs) =
-  case (==) x y of { True -> z ; False -> assoc x yzs ; } ;
+assoc x (Cons (y, z) yzs) =
+  if x == y then z else assoc x yzs
 
-assocm x Nil                   = Nothing ;
-assocm x (Cons (Pair y z) yzs) =
-  case (==) x y of { True -> Just z ; False -> assocm x yzs ; } ;
+assocm x []             = Nothing
+assocm x ((y, z) : yzs) =
+  if x == y then Just z else assocm x yzs
 
-subset Nil         ys = True ;
-subset (Cons x xs) ys =
-  case elem x ys of { True -> subset xs ys ; False -> False ; } ;
+subset []       ys = True
+subset (x : xs) ys =
+  if elem x ys then subset xs ys else False
 
-union xs ys = foldr ins xs ys ;
+union xs ys = foldr ins xs ys
 
-ins x ys = case elem x ys of { True -> ys ; False -> Cons x ys ; } ;
+ins x ys = if elem x ys then ys else x : ys
 
-histo xs = foldr histins Nil xs ;
+histo xs = foldr histins [] xs
 
-histins x Nil           = Cons (Pair x 1) Nil ;
-histins x (Cons yn yns) =
-  case yn of {
-  Pair y n -> case (==) x y of {
-              True -> Cons (Pair y ((+) n 1)) yns ;
-              False -> Cons yn (histins x yns) ;
-              } ;
-  } ;
+histins x []         = [(x, 1)]
+histins x ((y,n) : yns) =
+    if x == y
+      then (y, n + 1) : yns
+      else (y,n) : histins x yns
 
-sorted lt = foldr (ordins lt) Nil ;
+sorted lt = foldr (ordins lt) []
 
-ordins lt x Nil         = Cons x Nil ;
-ordins lt x (Cons y ys) =
-  case lt x y of {
-  True  -> Cons x (Cons y ys) ;
-  False -> Cons y (ordins lt x ys) ;
-  } ;
+ordins lt x []       = [x]
+ordins lt x (y : ys) =
+  if lt x y
+    then x : y : ys
+    else y : ordins lt x ys
 
-ends (K s a z n) = Cons a (Cons z Nil) ;
+ends (K s a z n) = [a,z]
 
-firstLetter (K s a z n) = a ;
+firstLetter (K s a z n) = a
 
-lastLetter (K s a z n) = z ;
+lastLetter (K s a z n) = z
 
 freqSorted ks =
-  let { ft = freqTabOf ks ; } in
-  Pair (sorted (decreasingFrequencyIn ft) ks) (length ft) ;
+  let ft = freqTabOf ks
+  in (sorted (decreasingFrequencyIn ft) ks, length ft)
 
 decreasingFrequencyIn ft (K s0 a x n0) (K s1 b y n1) =
-  let { freq = flip assoc ft ; } in
-  gt ((+) (freq a) (freq x)) ((+) (freq b) (freq y)) ;
+  let freq = flip assoc ft
+  in gt (freq a + freq x) (freq b + freq y)
 
-flip f x y = f y x ;
+flip f x y = f y x
 
-freqTabOf ks = histo (concatMap ends ks) ;
+freqTabOf ks = histo (concatMap ends ks)
 
-blocked = blockedWith Nil ;
+blocked = blockedWith []
 
-blockedWith ds Nil         = Nil ;
-blockedWith ds (Cons k ks) =
-  let { dsk = union ds (ends k) ;
-        eks = endsSubset dsk ;
-        det = filter eks ks ;
-        rest = filter (non eks) ks ; } in
-  Cons k (append det (blockedWith dsk rest)) ;
+blockedWith ds []       = []
+blockedWith ds (k : ks) =
+  let dsk = union ds (ends k)
+      eks = endsSubset dsk
+      det = filter eks ks
+      rest = filter (non eks) ks
+  in k : append det (blockedWith dsk rest)
 
-non f x = case f x of { True  -> False ; False -> True ; } ;
+non f x = if f x then False else True
 
-endsSubset ds k = subset (ends k) ds ;
+endsSubset ds k = subset (ends k) ds
 
-enKey k = K k (head k) (last k) (length k) ;
+enKey k = K k (head k) (last k) (length k)
 
-hashAssoc (Hash hs hf) = hf ;
+hashAssoc (Hash hs hf) = hf
 
 findhash mv ks =
-  case hashes mv (length ks) ks (Hash (H Nothing Nothing Nil) Nil) of {
-  Cons (Hash s f) hs -> Just f ;
-  Nil                -> Nothing ;
-  } ;
+  case hashes mv (length ks) ks (Hash (H Nothing Nothing []) []) of
+    (Hash s f : hs) -> Just f
+    []       -> Nothing
 
-hashes maxval nk Nil         h = Cons h Nil ;
-hashes maxval nk (Cons k ks) h =
-  concatMap (hashes maxval nk ks) (
-  concatMap (insertKey nk k) (
+hashes maxval nk []       h = [h]
+hashes maxval nk (k : ks) h =
+  concatMap (hashes maxval nk ks) $
+  concatMap (insertKey nk k)      $
   concatMap (assignUpto maxval (lastLetter k))
-            (assignUpto maxval (firstLetter k) h))) ;
+            (assignUpto maxval (firstLetter k) h)
+  --TODO Indent improvements here?
 
 assignUpto maxval c h =
-  case assocm c (hashAssoc h) of {
-  Nothing -> map (assign c h) (enumFromTo 0 maxval) ;
-  Just v  -> Cons h Nil ;
-  } ;
+  case assocm c (hashAssoc h) of
+    Nothing -> map (assign c h) (enumFromTo 0 maxval)
+    Just v  -> [h]
 
 insertKey nk k (Hash hs hf) =
-  case hinsert nk (hash hf k) hs of {
-  Nothing    -> Nil ;
-  Just hsNew -> Cons (Hash hsNew hf) Nil ;
-  } ;
+  case hinsert nk (hash hf k) hs of
+    Nothing    -> []
+    Just hsNew -> [Hash hsNew hf]
 
-assign c (Hash hs hf) v = Hash hs (Cons (Pair c v) hf) ;
+assign c (Hash hs hf) v = Hash hs ((c, v) : hf)
 
 hinsert nk h (H lo hi hs) =
-    let { newlo = case lo of { Nothing -> h ; Just x -> min x h } ;
-          newhi = case hi of { Nothing -> h ; Just x -> max x h } ;
-        } in
-    case elem h hs of {
-    True  -> Nothing ;
-    False -> case (<=) ((-) ((+) newhi 1) newlo) nk of {
-             False -> Nothing ;
-             True  -> Just (H (Just newlo) (Just newhi) (Cons h hs)) ;
-             } ;
-    } ;
+    let newlo = case lo of
+                  Nothing -> h
+                  Just x  -> min x h
+        newhi = case hi of
+                  Nothing -> h
+                  Just x  -> max x h
+    in if elem h hs
+         then Nothing
+         else if (newhi + 1 - newlo) <= nk
+                then Just (H (Just newlo) (Just newhi) (h : hs))
+                else Nothing
 
-hash hf (K s a z n) = (+) n ((+) (assoc a hf) (assoc z hf)) ;
+hash hf (K s a z n) = n + assoc a hf + assoc z hf
 
-cichelli ss = case freqSorted (map enKey ss) of {
-              Pair ks mv -> findhash mv (blocked ks) ;
-              } ;
+cichelli ss =
+  case freqSorted (map enKey ss) of
+    (ks, mv) -> findhash mv (blocked ks)
+
+keywordsOne =
+  [ "as"
+  , "case"
+  , "class"
+  , "data"
+  , "default"
+  , "instance"
+  ]
+keywordsTwo =
+  [ "let"
+  , "module"
+  , "newtypeg"
+  , "of"
+  , "qualified"
+  , "then"
+  , "type"
+  , "where"
+  ]
 
 main =
-  let {
-    keywords =
-      Cons "as" (
-      Cons "case" (
-      Cons "class" (
-      Cons "data" (
-      Cons "default" (
-      Cons "instance" (
-      Cons "let" (
-      Cons "module" (
-      Cons "newtype" (
-      Cons "of" (
-      Cons "qualified" (
-      Cons "then" (
-      Cons "type" (
-      Cons "where"
-          Nil ))))))))))))) ;
-   } in
-   case cichelli keywords of {
-       Just hf -> emitHashFun hf ;
-       Nothing -> 0 ;
-       } ;
+   case cichelli (append keywordsOne keywordsTwo) of
+       Just hf -> emitHashFun hf
+       Nothing -> 0
 
-emitHashFun Nil = 0 ;
-emitHashFun (Cons (Pair c n) hf) = (+) ((+) c n) (emitHashFun hf);
-
-}
+emitHashFun [] = 0
+emitHashFun ((c, n) : hf) = c + n + emitHashFun hf

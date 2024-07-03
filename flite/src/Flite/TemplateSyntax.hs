@@ -16,18 +16,18 @@ data Atom =
   | CON Arity Index
   | FUN Bool Arity Id
   | PRI Arity String
-  deriving (Show, Read)
+  deriving (Show, Read, Eq)
 
 type Normal = Bool
 
 type RegId = Int
 
 data App = APP Normal [Atom] | CASE LUT [Atom] | PRIM RegId [Atom]
-  deriving (Show, Read)
+  deriving (Show, Read, Eq)
 
 data LUT = LOffset Int
          | LInline [(Int, Atom)]
-  deriving (Show, Read)
+  deriving (Show, Read, Eq)
 
 
 type Template = (String, Int, [LUT], [Atom], [App])
@@ -44,6 +44,15 @@ appLen (APP  _ as) = length as
 appLen (CASE _ as) = length as
 appLen (PRIM _ as) = length as
 
+appAtoms :: App -> [Atom]
+appAtoms (APP  _ as) = as
+appAtoms (CASE _ as) = as
+appAtoms (PRIM _ as) = as
+
 isFUN :: Atom -> Bool
 isFUN (FUN _ _ _) = True
 isFUN           _ = False
+
+isVAR :: Atom -> Bool
+isVAR (VAR _ _) = True
+isVAR        _  = False

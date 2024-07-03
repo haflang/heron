@@ -8,10 +8,10 @@ module Heron.Core.Alu
   , primOpPat
   ) where
 
-import Clash.Prelude
-import Clash.Annotations.BitRepresentation.Deriving
+import           Clash.Annotations.BitRepresentation.Deriving
+import           Clash.Prelude
 
-import Heron.Template
+import           Heron.Template
 
 -- | Product type for ALU input, when ready to be evaluated
 data AluIn = AluIn OpCode IsSwapped PInt PInt

@@ -1,27 +1,44 @@
-module Heron.Tests.Core.Board where
+module Heron.Tests.Board where
 
-import Prelude
+import           Prelude
 
-import Test.Tasty
-import Test.Tasty.TH
-import Test.Tasty.Hedgehog
+import           Test.Tasty
+import           Test.Tasty.Hedgehog
+import           Test.Tasty.TH
 
-import Hedgehog ((===))
-import qualified Hedgehog as H
-import System.Process
+import           Hedgehog            ((===))
+import qualified Hedgehog            as H
 
-import Heron.Core.Board (sim)
-import Heron.Template
-import Heron.External
+import           Heron.Board         (sim)
+import           Heron.Core.Core     (CPUStats (..))
+import           Heron.External
+import           Heron.Template
 
 assertBenchmark :: FilePath -> H.Property
 assertBenchmark prog =
   H.withTests 1 $ H.property $ do
+
+  prog' <- H.evalIO $ getProjectFile prog
+  -- Run emulator for return value and cycle count (sans GC)
   (ansRet, ansCycles)
-    <- H.evalIO (compileBenchmark prog >>= runEmulator)
-  (gotCycles, PrimInt gotRet)
-    <- H.evalIO (compileBenchmark prog >>= sim (fromIntegral ansCycles+2))
-  (fromIntegral gotCycles, fromIntegral gotRet) === (ansCycles, ansRet)
+    <- H.evalIO $
+       compileBenchmark prog' >>=
+       runEmulator
+
+  -- Pad expected runtime by expected max GC overhead
+  let expCycles = ansCycles + maxGcOverhead ansCycles
+
+  -- Run simulation of hardware
+  (_, stats, PrimInt gotRet)
+    <- H.evalIO $
+       compileBenchmark prog >>=
+       sim (fromIntegral expCycles)
+
+  -- Eq check
+  (fromIntegral (_mutCycles stats), fromIntegral gotRet) === (ansCycles, ansRet)
+
+  where
+    maxGcOverhead n = n
 
 prop_BenchAdjoxo, prop_BenchBraun, prop_BenchCichelli, prop_BenchClausify, prop_BenchCountdown, prop_BenchFib, prop_BenchKnuthbendix, prop_BenchMate, prop_BenchMss, prop_BenchOrdlist, prop_BenchPermsort, prop_BenchQueens, prop_BenchQueens2, prop_BenchSumpuz, prop_BenchTaut, prop_BenchWhile
   :: H.Property

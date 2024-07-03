@@ -1,13 +1,13 @@
 {-# LANGUAGE QuasiQuotes #-}
 
-{-| Clock division utilities for Xilinx UltraScale+ using matched `BUFGCE_DIV`
+{-| Clock division utilities for Xilinx UltraScale+ using matched @BUFGCE_DIV@
   primitives.
 
   Also provides a helper function for multipumping a circuit --- clocking
   a subcircuit at twice the base rate. Care must be taken to manually insert
   valid Multi-Cycle Path (MCP) constraints.
 -}
-module Heron.Xilinx.ClockDiv
+module Heron.Primitives.ClockDiv
   (-- * Clock Division
    DividedClks
   ,clockDiv
@@ -15,17 +15,15 @@ module Heron.Xilinx.ClockDiv
   ,multiPump
   ) where
 
-import Clash.Prelude
-import qualified Clash.Explicit.Prelude as E
-import Clash.Explicit.Testbench
-import Clash.Annotations.Primitive
-import Clash.Annotations.TH
-import Unsafe.Coerce
-import Data.String.Interpolate      (i)
-import Data.String.Interpolate.Util (unindent)
+import           Clash.Annotations.Primitive
+import qualified Clash.Explicit.Prelude       as E
+import           Clash.Prelude
+import           Data.String.Interpolate      (i)
+import           Data.String.Interpolate.Util (unindent)
+import           Unsafe.Coerce
 
--- | Synonym constraint for two related, divided clocks. The `fast` domain is
---   `divN` times faster than the `slow` domain.
+-- | Synonym constraint for two related, divided clocks. The @fast@ domain is
+--   @divN@ times faster than the @slow@ domain.
 type DividedClks divN fast slow period edge reset init polarity
   = ( KnownDomain fast
     , KnownDomain slow
@@ -55,12 +53,12 @@ mcpRegOut clk rst en a = regA
     regA = E.register clk rst en undefined a
 {-# NOINLINE mcpRegOut #-}
 
-{-| Multipump a subcircuit from the `domFast` domain with `mcpRegIn` and
-    `mcpRegOut` . Apply MCP constraints to relax timing for interfaces to/from
+{-| Multipump a subcircuit from the @domFast@ domain with @mcpRegIn@ and
+    @mcpRegOut@. Apply MCP constraints to relax timing for interfaces to/from
     the multipumped circuit. For Vivado, this likely includes:
-      1) Relaxing MCPs between `domSlow` and `domFast`
-      2) Relaxing any combinatorial paths between the `mcpRegOut` and `mcpRegIn` registers
-      3) Ensuring the `mcpRegIn`/`mcpRegOut` hierarchies are preserved during synthesis
+      1) Relaxing MCPs between @domSlow@ and @domFast@
+      2) Relaxing any combinatorial paths between the @mcpRegOut@ and @mcpRegIn@ registers
+      3) Ensuring the @mcpRegIn@/@mcpRegOut@ hierarchies are preserved during synthesis
 
     A dubious example:
 
@@ -100,7 +98,7 @@ multiPump
   -> (Clock domFast -> Reset domFast -> Enable domFast -> Signal domFast a -> Signal domFast b)
   -- ^ Our circuit in the fast domain. Takes 1 cycle to compute result
   -> Signal domSlow a -> Signal domSlow a -> (Signal domSlow b, Signal domSlow b)
-  -- ^ Wrapped circuit exposed in `domSlow` domain as a dual-ported version.
+  -- ^ Wrapped circuit exposed in @domSlow@ domain as a dual-ported version.
 multiPump clkFast rstFast enFast clkSlow circ a b = (c,d)
   where
     fastA = E.unsafeSynchronizer clkSlow clkFast a
@@ -119,7 +117,7 @@ multiPump clkFast rstFast enFast clkSlow circ a b = (c,d)
 {-# NOINLINE multiPump #-}
 
 -- | A clock divider circuit with matched phases for UltraScale+.
---   We take an input clock and split it into two matched paths of `BUFGCE_DIV`s.
+--   We take an input clock and split it into two matched paths of @BUFGCE_DIV@s.
 --   The first is buffered version of the original, the second is the divided
 --   clock (in phase with the first output).
 clockDiv
@@ -137,14 +135,14 @@ clockDiv
   -- ^ Enable for the divider
   -> (Clock domFast, Clock domSlow)
   -- ^ Output clocks
-clockDiv !n clk !rst !en = ( unsafeCoerce clk, unsafeCoerce clk)
+clockDiv !_ clk !_ !_ = ( unsafeCoerce clk, unsafeCoerce clk)
 {-# NOINLINE clockDiv #-}
 {-# ANN clockDiv hasBlackBox #-}
 
 {-# ANN clockDiv (InlineYamlPrimitive [Verilog] $ unindent [i|
  BlackBox:
    kind: Declaration
-   name: Heron.Xilinx.ClockDiv.clockDiv
+   name: Heron.Primitives.ClockDiv.clockDiv
    type: |-
      clockDiv
        :: ( KnownDomain domIn confIn       -- ARG[0]

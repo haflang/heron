@@ -1,6 +1,6 @@
+{-# LANGUAGE DataKinds              #-}
+{-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleInstances #-}
 
 {-| A simple stack implementation -}
 module Heron.Core.Stack
@@ -14,22 +14,27 @@ module Heron.Core.Stack
  , Stack
  ) where
 
-import Clash.Prelude
-import Data.Maybe (isJust)
-import Heron.Core.Types
+import           Clash.Prelude
+import           Data.Maybe       (isJust)
+import           Heron.Core.Types
 
+-- | Stack's RAM address type indexed by the depth
 type RamAddr d = Index d
+-- | Stack's pop type
 type Pop = Bool
 
+-- | Stack input is an @a@ value to push and a pop flag
 type SIn a
   = (Maybe a, Pop)
   -- ^ (Push word, Pop flag)
 
+-- | Stack output contains current size, current top element, and the new top
+-- element after any push/pops.
 data SOut a d
   = SOut
-  { _size    :: RamAddr d -- ^ Current size of the stack
-  , _top     :: Maybe a   -- ^ Current top stack element
-  , _newTop  :: Maybe a   -- ^ New top stack element after pending operation
+  { _size   :: RamAddr d -- ^ Current size of the stack
+  , _top    :: Maybe a   -- ^ Current top stack element
+  , _newTop :: Maybe a   -- ^ New top stack element after pending operation
   } deriving (Show, Generic, NFDataX, ShowX)
 
 instance SizedRead (SOut a d) where
@@ -38,7 +43,7 @@ instance SizedRead (SOut a d) where
   size (SOut sz _ _) = sz
   read (SOut _  x _) = x
 
--- | A stack contains elements of type `a` with a depth of `d` elements and a
+-- | A stack contains elements of type @a@ with a depth of @d@ elements and a
 --   pop-before-push semantics.
 type Stack dom a d = Signal dom (SIn a) -> Signal dom (SOut a d)
 
@@ -84,7 +89,7 @@ newStack ramPrim inps = SOut <$> sp <*> top <*> top'
 
     -- Pick next top element
     top' = mux (isJust <$> mpush)
-                 (mpush)
+                 mpush
                  (mux pop ramOut top)
 
     top = delay Nothing top'

@@ -1,0 +1,16 @@
+cradle:
+  cabal:
+    - path: "flite/src"
+      component: "lib:flite"
+
+    - path: "flite/bin/fl-parsec.hs"
+      component: "flite:exe:flite"
+
+    - path: "hdl/src"
+      component: "lib:heron"
+
+    - path: "hdl/bin/Main.hs"
+      component: "heron:exe:heron"
+
+    - path: "hdl/tests"
+      component: "heron:test:test-library"

@@ -1,0 +1,42 @@
+and False a = False
+and True a = a
+
+map f [] = []
+map f (x : xs) = f x : map f xs
+
+append [] ys = ys
+append (x : xs) ys = x : append xs ys
+
+concatMap f [] = []
+concatMap f (x : xs) = append (f x) (concatMap f xs)
+
+length xs = lengthAcc 0 xs
+
+lengthAcc acc [] = acc
+lengthAcc acc (x : xs) = lengthAcc (acc+1) xs
+
+nsoln nq = length (gen nq nq)
+
+gen nq n =
+  if n == 0
+    then [[]]
+    else concatMap (gen1 nq) (gen nq (n - 1))
+
+gen1 nq b = concatMap (gen2 b) (toOne nq)
+
+gen2 b q = if safe q 1 b
+             then [q : b]
+             else []
+
+safe x d [] = True
+safe x d (q : l) =
+  and (x /= q)     $
+  and (x /= q + d) $
+  and (x /= q - d) $
+  safe x (d + 1) l
+
+toOne n = if n == 1
+            then [1]
+            else n : toOne (n - 1)
+
+main = nsoln 4

@@ -33,6 +33,7 @@ library
                    Flite.PrettyHaskell
   Other-Modules: Flite.CallGraph
                  Flite.Case
+                 Flite.CommonSubExpr
                  Flite.ConcatApp
                  Flite.Dependency
                  Flite.Descend
@@ -59,7 +60,9 @@ library
   Build-Depends: base >= 3 && < 5,
                  array >= 0 && < 1,
                  containers >= 0 && < 1,
-                 parsec >= 3
+                 parsec >= 3,
+                 indents,
+                 mtl
 
 Executable flite
     Main-is:       bin/fl-parsec.hs

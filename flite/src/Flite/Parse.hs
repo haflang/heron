@@ -3,163 +3,258 @@ import qualified Flite.Prelude as Prelude
 import Flite.Syntax
 import Flite.Pretty
 
-import Control.Applicative
-import Control.Arrow
+-- import Control.Applicative
+import Control.Arrow hiding (app)
 import Control.Monad
-import Data.Char
+-- import Control.Monad.State
+import Data.Char hiding (chr)
 import Data.List
-import Text.ParserCombinators.Parsec hiding (many, option, (<|>))
-import Text.ParserCombinators.Parsec.Expr
-import Text.ParserCombinators.Parsec.Language
+import Text.Parsec.Expr
+import Text.Parsec.Indent
+import qualified Text.Parsec.Indent.Explicit as IE
+import Text.Parsec
+import Text.Parsec.Pos (SourcePos)
 import qualified Text.ParserCombinators.Parsec.Token as T
-import Text.ParserCombinators.Parsec.Language (haskellDef)
+import Data.Functor.Identity
 
-flite = T.makeTokenParser haskellDef
+type Parser a = ParsecT String () (IndentT Identity) a
 
-identifier = T.identifier flite
-reservedOp = T.reservedOp flite
-reserved = T.reserved flite
-natural = T.natural flite
-parens = T.parens flite
-semi = T.semi flite
-braces = T.braces flite
-symbol = T.symbol flite
-operator = T.operator flite
-charLiteral = T.charLiteral flite
+flite :: T.GenTokenParser String () (IndentT Identity)
+flite = T.makeTokenParser fliteDef
+
+fliteDef = T.LanguageDef
+      { T.commentStart   = "{-"
+      , T.commentEnd     = "-}"
+      , T.commentLine    = "--"
+      , T.nestedComments = True
+      , T.identStart     = letter
+      , T.identLetter    = alphaNum <|> oneOf "_'"
+      , T.opStart        = oneOf ":!#$%&*+./<=>?@\\^|-~"
+      , T.opLetter       = oneOf ":!#$%&*+./<=>?@\\^|-~"
+      , T.reservedOpNames= ["="
+                           ,"\\"
+                           ,"->"
+                           ,"-","+","==","/=","<="
+                           ]
+      , T.reservedNames  = ["let"
+                           ,"in"
+                           ,"case"
+                           ,"of"
+                           ,"if"
+                           ,"then"
+                           ,"else"
+                           ,"where"
+                           ]
+      , T.caseSensitive  = True
+      }
+
+identifier    = T.identifier flite
+reservedOp    = T.reservedOp flite
+reserved      = T.reserved flite
+natural       = T.natural flite
+parens        = T.parens flite
+semi          = T.semi flite
+braces        = T.braces flite
+brackets      = T.brackets flite
+symbol        = T.symbol flite
+operator      = T.operator flite
+charLiteral   = T.charLiteral flite
 stringLiteral = T.stringLiteral flite
-whiteSpace = T.whiteSpace flite
+whiteSpace    = T.whiteSpace flite
+comma         = T.comma flite
 
 prog :: Parser Prog
-prog = do whiteSpace
-          block defn
+prog = block (whiteSpace *> defn) <* eof
 
-block :: Parser a -> Parser [a]
-block p = braces (p `sepEndBy` semi) <?> "block"
+tryFor s m = try m <?> s
 
-primitives = ["(+)", "(-)", "(==)", "(/=)", "(<=)", "emit", "emitInt", "(.&.)",
-              "st32", "ld32"]
-
--- | Build an application out of an infix operation
-infixApp t x y = App t [x, y]
-
--- | Detect if an identifier if variable or constructor
+binApp t x y = App t [x, y]
 consOrVar n = if isLower (head n) then Var n else Con n
+infixName = Infix (try (symbol "`" *> identifier <* symbol "`") >>= return . binApp . consOrVar ) AssocLeft
 
--- | Capture \`InfixFunctions\`
-infixName = Infix ((symbol "`" *> identifier <* symbol "`") >>= return . infixApp . consOrVar ) AssocLeft
+binaryOp op assoc = Infix (reservedOp op >> return (binApp (Fun $ "(" ++ op ++ ")"))) assoc
+listCons = Infix (symbol ":" >> return (binApp (Con "Cons"))) AssocRight
+dollarOp = Infix (symbol "$" >> return (\x y -> App x [y]))   AssocRight
 
--- | Build primitive infix operators
-binary op assoc = Infix (reservedOp op >> return (infixApp (Fun $ "(" ++ op ++ ")"))) assoc
+opTable = [ [infixName              , binaryOp "."  AssocRight                        ]
+          , [binaryOp "+" AssocLeft , binaryOp "-"  AssocLeft                         ]
+          , [binaryOp "==" AssocNone, binaryOp "/=" AssocNone, binaryOp "<=" AssocNone]
+          , [listCons               , dollarOp                                        ]
+          ]
 
-opTable = [   [infixName, binary "." AssocRight]
-            , [binary "+" AssocLeft, binary "-" AssocLeft]
-            , [binary "==" AssocNone, binary "/=" AssocNone, binary "<=" AssocNone]
-            , [binary "$" AssocRight] ]
+-- | Constructor names
+conId :: Parser Id
+conId = tryFor "constructor" $
+            try (pure "Nil"   <* symbol "[]"  )
+        <|> try (pure "Pair"  <* symbol "(,)" )
+        <|> try (pure "Cons"  <* symbol "(:)" )
+        <|> (do c <- identifier
+                if isUpper (head c)
+                    then return c
+                    else unexpected ("variable " ++ show c)
+            )
 
-prim :: Parser Id
-prim = try $ do
-    v <- identifier
-     <|> pure (++) <*> symbol "(" <*> (pure (++) <*> operator <*> symbol ")")
-    if v `elem` primitives
-        then return v
-        else unexpected (show v) <?> "primitive"
+-- | Constructors
+con :: Parser Exp
+con = Con <$> conId
 
-opv :: Parser Id
-opv = try $ do
-    v@(_:h:_) <- pure concat <*> sequence [ symbol "(", operator, symbol ")" ]
-    if h /= ':'
-        then return v
-        else unexpected (show v) <?> "operator (variable)"
-
-opc :: Parser Id
-opc = try $ do
-    c@(_:h:_) <- pure concat <*> sequence [ symbol "(", operator, symbol ")" ]
-    if h == ':'
-        then return c
-        else unexpected (show c) <?> "operator (constructor)"
-
-specialcon :: Parser Id
-specialcon = try (  try (symbol "(:)")
-                <|> pure concat <*> sequence [ symbol "(", pure concat <*> many (symbol ",") , symbol ")" ]
-                <|> symbol "[]"
-                <?> "special constructor")
-
-vari :: Parser Id
-vari = try $ (do
+-- | Variable names
+varId :: Parser Id
+varId = tryFor "variable" $ do
     v <- identifier
     if isLower (head v) || head v == '_'
         then return v
-        else unexpected ("constructor " ++ show v) <?> "variable")
+        else unexpected ("constructor " ++ show v)
 
-coni :: Parser Id
-coni = try $ do
-    c <- identifier
-    if isUpper (head c)
-        then return c
-        else unexpected ("variable " ++ show c) <?> "constructor"
+-- | Variables
+var = Var <$> varId
 
-var = vari <|> opv
-con = specialcon <|> coni <|> opc
+-- | Primitive op names
+primId :: Parser Id
+primId = tryFor "primitive op" $ do
+  symbol "("
+  v <- choice $ map (\f -> try (reservedOp f) >> pure (wrap f)) primitives
+  symbol ")"
+  pure v
+  where
+    primitives = ["+", "-", "==", "/=", "<="]
+    wrap f = "(" ++ f ++ ")"
 
+-- | Primitive op
+prim :: Parser Exp
+prim = Fun <$> primId
+
+-- | Function definitions
 defn :: Parser Decl
-defn =  pure (Other . (++) "data ") <*> (reserved "data" *> (many1.noneOf) [';','}'])
-    <|> pure (Other . (++) "type ") <*> (reserved "type" *> (many1.noneOf) [';','}'])
-    <|> pure Func <*> var <*> many pat <*> (reservedOp "=" *> expr) <?> "definition"
+defn = withPos (do
+  f    <- varId
+  args <- many pat
+  reservedOp "="
+  sameOrIndented
+  body <- expr
+  pure $ Func f args body
+  ) <?> "definition"
 
 pat :: Parser Exp
-pat = pure Var <*> var
-    <|> pure App <*> (pure Con <*> con) <*> pure []
-    <|> (pure Wld <* reserved "_" <?> "Wildcard symbol")
-    <|> parens pat'
+pat =   try con
+    <|> try var
+    <|> try wild
+    <|> try pair
+    <|> try list
+    <|> parens expr
     <?> "pattern"
 
-pat' :: Parser Exp
-pat' = pure Var <*> var
-    <|> (pure Wld <* reserved "_" <?> "Wildcard symbol")
-    <|> pure App <*> (pure Con <*> con) <*> many pat
+app :: [Exp] -> Exp
+app [f] = f
+app (f:args) = App f args
 
 expr :: Parser Exp
-expr = buildExpressionParser opTable (pure App <*> expr' <*> many expr')
+expr = buildExpressionParser opTable $ withPos
+       (pure app <*/> atom <?> "expr")
 
-expr' :: Parser Exp
-expr' = pure Lam <*> ((symbol "\\" <?> "lambda abstraction") *> many var) <*> (reservedOp "->" *> expr)
-    <|> pure Case <*> (reserved "case" *> expr) <*> (reserved "of" *> block alt)
-    <|> pure Let <*> (reserved "let" *> block bind) <*> (reserved "in" *> expr)
-    <|> pure ifthenelse <*> (reserved "if" *> expr) <*> (reserved "then" *> expr) <*> (reserved "else" *> expr)
-    <|> pure Fun <*> prim
-    <|> pure Var <*> var
-    <|> pure Con <*> con
-    <|> pure Int <*> (pure fromInteger <*> natural)
-    <|> pure (Int . ord) <*> charLiteral
-    <|> pure stringExp <*> stringLiteral
-    <|> parens expr
+-- TODO Trying to fix ifThenElse parsing for braun example.
 
-ifthenelse :: Exp -> Exp -> Exp -> Exp
-ifthenelse x y z = Case x [(App (Con "True") [], y), (App (Con "False") [], z)]
+atom :: Parser Exp
+atom =   case_
+     <|> let_
+     -- <|> lam --TODO
+     <|> ifThenElse
+     <|> int
+     <|> chr
+     <|> prim
+     <|> str
+     <|> var
+     <|> con
+     <|> list
+     <|> pair
+     <|> parens expr
+     <?> "expression"
 
-stringExp :: String -> Exp
-stringExp [] = App (Con "Nil") []
-stringExp (x:xs) = App (Con "Cons") [Int . ord $ x, stringExp xs]
+case_ :: Parser Exp
+case_ = withPos $ do
+  reserved "case"
+  subj <- expr
+  reserved "of"
+  alts <- block alt
+  return $ Case subj alts
+  where
+    alt = withPos $ do
+      c <- many pat
+      reservedOp "->"
+      indented
+      rhs <- expr
+      return (app c, rhs)
 
-alt :: Parser Alt
-alt = pure (,) <*> pat' <*> (reservedOp "->" *> expr)
+let_ :: Parser Exp
+let_ = do
+  reserved "let"
+  bs <- block bind
+  reserved "in"
+  scope <- expr
+  return $ Let bs scope
+  where
+    bind = pure (,) <*> varId <*> (reservedOp "=" *> expr)
 
-bind :: Parser Binding
-bind = pure (,) <*> var <*> (reservedOp "=" *> expr)
+list = tryFor "list" $ do
+  xs <- brackets (expr `sepBy1` comma)
+  pure $ foldr (\x y -> App (Con "Cons") [x,y]) (Con "Nil") xs
 
-partitionDecl :: Prog -> (Prog, Prog)
-partitionDecl = partition isFunc
-    where
-        isFunc (Func _ _ _) = True
-        isFunc _            = False
+pair = tryFor "pair" $ do
+  symbol "("
+  a <- expr
+  comma
+  b <- expr
+  symbol ")"
+  pure $ App (Con "Pair") [a,b]
+
+lam :: Parser Exp
+lam = undefined
+
+ifThenElse :: Parser Exp
+ifThenElse = tryFor "ifThenElse" $ do
+  reserved "if"
+  scr <- expr
+  reserved "then"
+  t   <- expr
+  reserved "else"
+  f   <- expr
+  pure $ Case scr [(Con "True", t), (Con "False", f)]
+
+int :: Parser Exp
+int = pure Int <*> (pure fromInteger <*> natural)
+
+chr :: Parser Exp
+chr = pure (Int . ord) <*> charLiteral
+
+wild :: Parser Exp
+wild = pure Wld <* reserved "_"
+
+str :: Parser Exp
+str = pure stringExp <*> stringLiteral
+  where
+  stringExp []     = App (Con "Nil" ) []
+  stringExp (x:xs) = App (Con "Cons") [Int . ord $ x, stringExp xs]
+
+{-
+Tuples:
+tms <- parens (term `sepBy1` comma)
+        return $ foldl (\x y -> Pair x y) (head tms) (tail tms)
+Something similar for lists
+-}
+testParser :: Parser a -> String -> Either ParseError a
+testParser p = runIndent . runParserT p () "test"
 
 parseProgFile :: SourceName -> IO Prog
-parseProgFile f = parseFromFile prog f >>= \result -> case result of
-                    Left e  -> error . show $ e
-                    Right p -> return . Prelude.supplyPrelude . fst . partitionDecl $ p
+parseProgFile f = do
+  src <- readFile f
+  let res = runIndent $ runParserT prog () f src
+  case res of
+    Left e  -> error . show$ e
+    Right p -> return . Prelude.supplyPrelude $ p
 
+{-
+TODO
 
-parseProgFileExt :: SourceName -> IO (Prog, Prog)
-parseProgFileExt f = parseFromFile prog f >>= \result -> case result of
-                    Left e  -> error . show $ e
-                    Right p -> return . first Prelude.supplyPrelude . partitionDecl $ p
+Handle tuples
+
+-}

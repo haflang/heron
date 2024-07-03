@@ -1,96 +1,76 @@
-{
+find key ((k, v) : t) =
+  if key == k
+    then v
+    else find key t
 
-find key (Cons (Pair k v) t) = case (==) key k of {
-                               True  -> v ;
-                               False -> find key t ;
-                               } ;
+eval s (Const b)       = b
+eval s (Var x)         = find x s
+eval s (Not p)         = if eval s p then False    else True
+eval s (And p q)       = if eval s p then eval s q else False
+eval s (Implies p q)   = if eval s p then eval s q else True
 
-eval s (Const b)       = b ;
-eval s (Var x)         = find x s ;
-eval s (Not p)         = case eval s p of {
-                         True  -> False ;
-                         False -> True ;
-                         } ;
-eval s (And p q)       = case eval s p of {
-                         True  -> eval s q ;
-                         False -> False ;
-                         } ;
-eval s (Implies p q)   = case eval s p of {
-                         True  -> eval s q ;
-                         False -> True ;
-                         } ;
+vars (Const b)         = []
+vars (Var x)           = [x]
+vars (Not p)           = vars p
+vars (And p q)         = append (vars p) (vars q)
+vars (Implies p q)     = append (vars p) (vars q)
 
-vars (Const b)         = Nil ;
-vars (Var x)           = Cons x Nil ;
-vars (Not p)           = vars p ;
-vars (And p q)         = append (vars p) (vars q) ;
-vars (Implies p q)     = append (vars p) (vars q) ;
+bools n = if n == 0
+            then [[]]
+            else let m = n - 1
+                 in  append (map (Cons False) (bools m))
+                            (map (Cons True ) (bools m))
 
-bools n = case (==) n 0 of {
-          True  -> Cons Nil Nil ;
-          False -> let { m = (-) n 1 } in
-                   append (map (Cons False) (bools m))
-                          (map (Cons True) (bools m)) ;
-          } ;
+neq x y = x /= y
 
-neq x y = (/=) x y;
+rmdups []         = []
+rmdups (x : xs) = x : rmdups (filter (neq x) xs)
 
-rmdups Nil         = Nil ;
-rmdups (Cons x xs) = Cons x (rmdups (filter (neq x) xs)) ;
+substs p = let vs = rmdups (vars p)
+           in  map (zip vs) (bools (length vs))
 
-substs p = let { vs = rmdups (vars p) } in
-           map (zip vs) (bools (length vs)) ;
+isTaut p = and (map (flip eval p) (substs p))
 
-isTaut p = and (map (flip eval p) (substs p)) ;
+flip f y x = f x y
 
-flip f y x = f x y ;
+length xs = lengthAcc 0 xs
 
-length xs = lengthAcc 0 xs;
+lengthAcc acc [] = acc
+lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
 
-lengthAcc acc Nil = acc;
-lengthAcc acc (Cons x xs) = lengthAcc ((+) acc 1) xs;
+append []       ys = ys
+append (x : xs) ys = x : append xs ys
 
-append Nil         ys = ys ;
-append (Cons x xs) ys = Cons x (append xs ys) ;
+map f []         = []
+map f (x : xs) = f x : map f xs
 
-map f Nil         = Nil ;
-map f (Cons x xs) = Cons (f x) (map f xs) ;
+and []       = True
+and (b : bs) = if b then and bs else False
 
-and Nil         = True ;
-and (Cons b bs) = case b of {
-                  True  -> and bs ;
-                  False -> False ;
-                  } ;
+filter p []      = []
+filter p (x : xs) =
+  if p x
+    then x : filter p xs
+    else filter p xs
 
-filter p Nil         = Nil ;
-filter p (Cons x xs) = case p x of {
-                       True  -> Cons x (filter p xs) ;
-                       False -> filter p xs ;
-                       } ;
+null []       = True
+null (x : xs) = False
 
-null Nil         = True ;
-null (Cons x xs) = False;
+zip []       ys       = []
+zip (x : xs) []       = []
+zip (x : xs) (y : ys) = (x, y) : zip xs ys
 
-zip Nil         ys          = Nil ;
-zip (Cons x xs) Nil         = Nil ;
-zip (Cons x xs) (Cons y ys) = Cons (Pair x y) (zip xs ys) ;
+foldr1 f (x : xs) =
+  if null xs
+    then x
+    else f x (foldr1 f xs)
 
-foldr1 f (Cons x xs) = case null xs of {
-                       True  -> x ;
-                       False -> f x (foldr1 f xs) ;
-                       } ;
+imp v = Implies (Var 'q') (Var v)
 
-imp v = Implies (Var 'q') (Var v) ;
-
-names = "abcdef" ;
+names = "abcdef"
 
 testProp = Implies
              (foldr1 And (map imp names))
-             (Implies (Var 'q') (foldr1 And (map Var names))) ;
+             (Implies (Var 'q') (foldr1 And (map Var names)))
 
-main = case isTaut testProp of {
-       True  -> 1 ;
-       False -> 0 ;
-       } ;
-
-}
+main = if isTaut testProp then 1 else 0

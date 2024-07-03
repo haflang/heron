@@ -1,25 +1,25 @@
 module Heron.Tests.Core.Heap where
 
-import Prelude hiding (read)
-import qualified Clash.Prelude as C
-import Clash.Hedgehog.Sized.Vector
-import Data.Maybe (catMaybes)
-import Data.List (nub, mapAccumL, intersect)
+import           Clash.Hedgehog.Sized.Vector
+import qualified Clash.Prelude                as C
+import           Data.List                    (intersect, mapAccumL, nub)
+import           Data.Maybe                   (catMaybes)
+import           Prelude                      hiding (read)
 
-import Test.Tasty
-import Test.Tasty.TH
-import Test.Tasty.Hedgehog
+import           Test.Tasty
+import           Test.Tasty.Hedgehog
+import           Test.Tasty.TH
 
-import Hedgehog ((===))
-import qualified Hedgehog as H
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
-import GHC.TypeNats
-import GHC.Natural (Natural)
+import           GHC.Natural                  (Natural)
+import           GHC.TypeNats
+import           Hedgehog                     ((===))
+import qualified Hedgehog                     as H
+import qualified Hedgehog.Gen                 as Gen
+import qualified Hedgehog.Range               as Range
 
-import Heron.Core.Heap
-import Heron.Core.Types
-import Heron.Xilinx.DualPortRam
+import           Heron.Core.Heap
+import           Heron.Core.Types
+import           Heron.Primitives.DualPortRam
 
 -- Generate a single heap operation
 genOp :: forall d a .
@@ -55,9 +55,9 @@ genOpVec genA = Gen.filter noCollision $
         in rwCollision && wwCollision
 
     getRAddr (C.RamRead a) = Just a
-    getRAddr _ = Nothing
+    getRAddr _             = Nothing
     getWAddr (C.RamWrite a _) = Just a
-    getWAddr _ = Nothing
+    getWAddr _                = Nothing
 
 genOpVecs :: forall d p a .
              (C.KnownNat d
@@ -74,6 +74,8 @@ updateAt n x xs = pre ++ [x] ++ post
     (pre, rest) = splitAt n xs
     post = tail rest
 
+-- This implementation follows the double pumped architecture of the UltraRAM
+-- blocks. All actions on port A are committed before the actions on port B.
 golden :: forall d p a .
           (C.KnownNat d
           ,C.KnownNat p)

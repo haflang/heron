@@ -1,6 +1,6 @@
 module Main where
 
-import Prelude
+import           Prelude
 {-
 import Build_doctests (flags, pkgs, module_sources)
 import Test.DocTest (doctest)
@@ -10,7 +10,7 @@ import System.Process
 getGlobalPackageDb :: IO String
 getGlobalPackageDb = readProcess "ghc" ["--print-global-package-db"] ""
 
-main = do 
+main = do
   inNixShell <-lookupEnv "IN_NIX_SHELL"
   extraFlags <-
     case inNixShell of

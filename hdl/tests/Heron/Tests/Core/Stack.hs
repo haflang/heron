@@ -1,22 +1,22 @@
 module Heron.Tests.Core.Stack where
 
-import Prelude
-import qualified Clash.Prelude as C
-import Control.Monad
-import Data.Maybe (listToMaybe)
+import qualified Clash.Prelude       as C
+import           Control.Monad
+import           Data.Maybe          (listToMaybe)
+import           Prelude
 
-import Test.Tasty
-import Test.Tasty.TH
-import Test.Tasty.Hedgehog
+import           Test.Tasty
+import           Test.Tasty.Hedgehog
+import           Test.Tasty.TH
 
-import Hedgehog ((===))
-import qualified Hedgehog as H
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
-import GHC.TypeNats
-import GHC.Natural (Natural)
+import           GHC.Natural         (Natural)
+import           GHC.TypeNats
+import           Hedgehog            ((===))
+import qualified Hedgehog            as H
+import qualified Hedgehog.Gen        as Gen
+import qualified Hedgehog.Range      as Range
 
-import Heron.Core.Stack
+import           Heron.Core.Stack
 
 genTup :: H.Gen a -> H.Gen b -> H.Gen (a,b)
 genTup genA genB

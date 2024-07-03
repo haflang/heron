@@ -1,62 +1,56 @@
-{
+tail (x : xs) = xs
 
-tail (Cons x xs) = xs;
+one p [] = []
+one p (x : xs) = if p x then [x] else one p xs
 
-one p Nil = Nil;
-one p (Cons x xs) = case p x of { True -> Cons x Nil ; False -> one p xs };
+map f [] = []
+map f (x : xs) = f x : map f xs
 
-map f Nil = Nil;
-map f (Cons x xs) = Cons (f x) (map f xs);
+append []       ys = ys
+append (x : xs) ys = x : append xs ys
 
-append Nil ys = ys;
-append (Cons x xs) ys = Cons x (append xs ys);
+concatMap f [] = []
+concatMap f (x : xs) = append (f x) (concatMap f xs)
 
-concatMap f Nil = Nil;
-concatMap f (Cons x xs) = append (f x) (concatMap f xs);
+length xs = lengthAcc 0 xs
 
-length xs = lengthAcc 0 xs;
-
-lengthAcc acc Nil = acc;
-lengthAcc acc (Cons x xs) = lengthAcc ((+) 1 acc) xs;
+lengthAcc acc [] = acc
+lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
 
 replicate n x =
-  case (==) n 0 of {
-    True -> Nil;
-    False -> Cons x (replicate ((-) n 1) x);
-  };
+  if n == 0
+    then []
+    else x : replicate (n - 1) x
 
-l = 0;
-r = 1;
-d = 2;
+l = 0
+r = 1
+d = 2
 
-eq x y = (==) x y;
+eq x y = x == y
 
-left  xs = map (one (eq l)) (tail xs);
-right xs = Cons Nil (map (one (eq r)) xs);
-down  xs = map (one (eq d)) xs;
+left  xs = map (one (eq l)) (tail xs)
+right xs = [] : map (one (eq r)) xs
+down  xs = map (one (eq d)) xs
 
-merge Nil ys = Nil;
-merge (Cons x xs) Nil = Cons x xs;
-merge (Cons x xs) (Cons y ys) = Cons (append x y) (merge xs ys);
+merge [] ys = []
+merge (x : xs) [] = x : xs
+merge (x : xs) (y : ys) = append x y : merge xs ys
 
-next mask = merge (merge (down mask) (left mask)) (right mask);
+next mask = merge (merge (down mask) (left mask)) (right mask)
 
-fill Nil = Nil;
-fill (Cons x xs) = append (lrd x xs) (map (Cons x) (fill xs));
+fill [] = []
+fill (x : xs) = append (lrd x xs) (map ((:) x) (fill xs))
 
-lrd Nil ys = Cons (Cons (Cons l (Cons r (Cons d Nil))) ys) Nil;
-lrd (Cons x xs) ys = Nil;
+lrd [] ys = [[l,r,d] : ys]
+lrd (x : xs) ys = []
 
 solve n mask =
-  case (==) n 0 of {
-    True -> Cons Nil Nil;
-    False -> concatMap (sol ((-) n 1)) (fill mask);
-  };
+  if n == 0
+    then [[]]
+    else concatMap (sol (n - 1)) (fill mask)
 
-sol n row = map (Cons row) (solve n (next row));
+sol n row = map ((:) row) (solve n (next row))
 
-nqueens n = length (solve n (replicate n Nil));
+nqueens n = length (solve n (replicate n []))
 
-main = nqueens 11;
-
-}
+main = nqueens 11

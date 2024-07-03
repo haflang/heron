@@ -4,27 +4,28 @@ A primitive for a single-port distributed LUT RAM on Xilinx devices.
 
 Our simulation code is a direct copy of Clash's `blockRam1`. The verilog output
 is nearly equivalent but we force mapping to distributed RAM using the
-`ram_style` attribute. Ideally we would generalise Clash's existing memory
+@ram_style@ attribute. Ideally we would generalise Clash's existing memory
 primitives, but this addition will do as a stop-gap.
 
 -}
-{-# LANGUAGE QuasiQuotes, MagicHash #-}
-module Heron.Xilinx.DistributedRam
+{-# LANGUAGE MagicHash   #-}
+{-# LANGUAGE QuasiQuotes #-}
+module Heron.Primitives.DistributedRam
   ( distRam1
   , distRam1E
   ) where
 
-import Clash.Annotations.Primitive
-import qualified Clash.Explicit.Prelude as E
-import qualified Clash.Explicit.BlockRam as EB
-import Clash.Prelude
-import Data.String.Interpolate      (i)
-import Data.String.Interpolate.Util (unindent)
-import Data.Maybe (isJust)
-import Clash.Signal.Internal (invertReset)
-import GHC.Stack (HasCallStack, withFrozenCallStack)
+import           Clash.Annotations.Primitive
+import qualified Clash.Explicit.BlockRam      as EB
+import qualified Clash.Explicit.Prelude       as E
+import           Clash.Prelude
+import           Clash.Signal.Internal        (invertReset)
+import           Data.Maybe                   (isJust)
+import           Data.String.Interpolate      (i)
+import           Data.String.Interpolate.Util (unindent)
+import           GHC.Stack                    (HasCallStack)
 
--- | A version of 'distRam' that is initialized with the same value on all
+-- | A distributed LUTRAM that is initialized with the same value on all
 -- memory positions. Clock, reset, and enable are all hidden.
 distRam1
    :: forall n dom a r addr
@@ -32,7 +33,7 @@ distRam1
      , NFDataX a
      , Enum addr
      , NFDataX addr
-     , HasCallStack
+     , GHC.Stack.HasCallStack
      , 1 <= n )
   => ResetStrategy r
   -- ^ Whether to clear BRAM on asserted reset ('ClearOnReset') or
@@ -50,12 +51,12 @@ distRam1
   -- ^ Value of the BRAM at address @r@ from the previous clock cycle
 distRam1 = hideClockResetEnable distRam1E
 
--- | A version of 'distRam' that is initialized with the same value on all
+-- | A distributed LUTARM that is initialized with the same value on all
 -- memory positions. Clock, reset, and enable are all exposed.
 distRam1E
    :: forall n dom a r addr
    . ( KnownDomain dom
-     , HasCallStack
+     , GHC.Stack.HasCallStack
      , NFDataX a
      , Enum addr
      , NFDataX addr
@@ -113,7 +114,7 @@ distRam1E clk rst0 en rstStrategy n@SNat a rd0 mw0 =
 distRam1E#
   :: forall n dom a
    . ( KnownDomain dom
-     , HasCallStack
+     , GHC.Stack.HasCallStack
      , NFDataX a )
   => Clock dom
   -- ^ 'Clock' to synchronize to
@@ -140,7 +141,7 @@ distRam1E# clk en n a =
 
 {-# ANN distRam1E# (InlineYamlPrimitive [Verilog] $ unindent [i|
  BlackBox:
-    name: Heron.Xilinx.DistributedRam.distRam1E#
+    name: Heron.Primitives.DistributedRam.distRam1E#
     kind: Declaration
     outputUsage: NonBlocking
     type: |-

@@ -10,6 +10,7 @@
 module Heron.Core.ParStack
   ( -- *  Generation
     newCachedParStack
+  , newParStack
     -- * ParStack Types
   , Offset
   , PSAddr
@@ -20,11 +21,9 @@ module Heron.Core.ParStack
   , top
   ) where
 
-import Clash.Prelude
-import Data.Maybe (isJust, fromJust)
-
-import Heron.Core.Types
-import Heron.Xilinx.DistributedRam
+import           Clash.Prelude
+import           Data.Maybe       (fromJust, isJust)
+import           Heron.Core.Types
 
 -- | The shifting offset for our \( 2^p \) banks of sub-memories
 type Offset p = Signed (1 + p)
@@ -33,7 +32,7 @@ type Offset p = Signed (1 + p)
 type PSAddr d = Index d
 
 -- | The address within each sub-memory
-type RamAddr p d = Unsigned (CLog 2 d - p)
+type RamAddr p d = Index (d `Div` (2^p))
 
 -- | ParStack input
 type PSIn a p
@@ -45,25 +44,29 @@ type PSIn a p
 -- | ParStack output
 data PSOut a p d
   = PSOut
-  { _size  :: PSAddr d -- ^ Current stack size
-  , _size' :: PSAddr d -- ^ New stack size after pending operation
-  , _tops  :: Vec (2^p) (Maybe a) -- ^ Top \( 2^p \) stack elements
+  { _size   :: PSAddr d -- ^ Current stack size
+  , _size'  :: PSAddr d -- ^ New stack size after pending operation
+  , _tops   :: Vec (2^p) a -- ^ Top \( 2^p \) stack elements
+  , _snoops :: Vec (2^p) a -- ^ Top \( 2^p \) stack elements
   } deriving (Show, Generic, NFDataX, ShowX)
 
 -- | Return just the top atom from the stack
-top :: PSOut a p d -> a
-top = fromJust . head . (++ singleton Nothing) . _tops
+top :: BitPack a => PSOut a p d -> a
+top = head . (++ singleton (unpack 0)) . _tops
 
 instance SizedRead (PSOut a p d) where
   type SizedAddr (PSOut a p d) = PSAddr d
-  type SizedData (PSOut a p d) = Vec (2^p) (Maybe a)
-  size (PSOut sz _ _) = sz
-  read (PSOut _ _ x) = x
+  type SizedData (PSOut a p d) = Vec (2^p) a
+  size (PSOut sz _ _ _) = sz
+  read (PSOut _  _ x _) = x
 
--- | A parallel stack contains elements of type `a`,
---   with simultaneous access to the top `p` elements,
---   and a full depth of `d` elements.
-type ParStack dom a p d = Signal dom (PSIn a p) -> Signal dom (PSOut a p d)
+-- | A parallel stack contains elements of type @a@,
+--   with simultaneous access to the top @p@ elements,
+--   and a full depth of @d@ elements.
+type ParStack dom a p d = Signal dom (PSIn a p) ->
+                          Signal dom (PSAddr d) ->
+                          -- ^ An override for the stack pointer. Can be (ab)used to for random access into the stack
+                          Signal dom (PSOut a p d)
 
 -- | Parallel stack /without/ extra caching of top \( 2^p \) entries
 newParStack
@@ -71,13 +74,14 @@ newParStack
      ( KnownNat p
      , KnownNat d
      , NFDataX  a
+     , BitPack  a
      , HiddenClockResetEnable dom
      , 1 <= d
      , 1 <= d `Div` 2^p
      , 1 <= 2^p
      , p <= CLog 2 d )
   => ParStack dom a p d
-newParStack ins = PSOut <$> fmap bitCoerce sp <*> fmap bitCoerce sp' <*> bundle rOuts
+newParStack ins snoopAddr = PSOut <$> fmap bitCoerce sp <*> fmap bitCoerce sp' <*> bundle rOuts <*> bundle sOuts
   where
     -- Resolve input fields
     pushes    = unbundle (maybe (repeat Nothing) snd <$> ins)
@@ -86,21 +90,29 @@ newParStack ins = PSOut <$> fmap bitCoerce sp <*> fmap bitCoerce sp' <*> bundle 
 
     -- Stack size tracking
     sp  = delay (0 :: Unsigned (CLog 2 d)) sp'
-    sp' = wrapAddr @d $
-          (bitCoerce . resize) <$> (offsetExt + (bitCoerce . resize <$> sp))
+    sp' = wrapAddr @d $ bitCoerce . resize <$> offsetExt + (bitCoerce . resize <$> sp)
 
     -- Rotation required for top block (inspect LSBs)
     rotVal = delay 0 rotVal'
     rotVal' = resize <$> sp' :: Signal dom (Unsigned p)
+    snoopRotVal = delay 0 snoopRotVal'
+    snoopRotVal' = resize . bitCoerce <$> 1 + snoopAddr :: Signal dom (Unsigned p)
+
 
     -- Generate RAM inputs
-    addrs = unbundle $ delay (iterateI (\x->x-1) (-1))
-                             (bundle addrs')
-    addrs' = map (\a -> wrapAddr @d $ offsetExt + a) addrs
+    addrs' = iterateI (\x->x-1) (sp' - 1)
+    -- ^ Suspicious
+    -- of iterateI maybe inferring an adder chain rather than N independent
+    -- adders...
+    -- addrs' = imap (\x _ -> sp' - (pure . bitCoerce $ resize x) - 1) (repeat ())
     ramAddrs = map (fmap (msbs . bitCoerce . resize)) addrs'
+    snoopAddrs' = iterateI (\x->x-1) (snoopAddr + snatToNum (SNat @(2^p)))
+    -- snoopAddrs' = imap (\x _ -> snoopAddr - (pure . bitCoerce $ resize x) - 1) (repeat ())
+    snoopRamAddrs = map (fmap (msbs . bitCoerce . resize)) snoopAddrs'
+
 
     msbs :: Unsigned (CLog 2 d) -> RamAddr p d
-    msbs x = resize $ x `shiftR` snatToNum (SNat :: SNat p)
+    msbs x = bitCoerce . resize $ x `shiftR` snatToNum (SNat :: SNat p)
 
     wElems = reverse .
              unbundle $
@@ -108,20 +120,28 @@ newParStack ins = PSOut <$> fmap bitCoerce sp <*> fmap bitCoerce sp' <*> bundle 
                     (bundle pushes)
                     rotVal'
 
-    wCtrls = zipWith (liftA2 (\a e -> ((a,) . Just) <$> e))
+    wCtrls = zipWith (liftA2 (\a -> maybe (RamRead a) (RamWrite a)))
                      ramAddrs
                      wElems
+    snoopCtrls = map (fmap RamRead) snoopRamAddrs
 
     -- Gather RAM outputs
-    rElems = zipWith (readNew (blockRam1 ClearOnReset
-                                         (SNat :: SNat (d `Div` (2^p)))
-                                         Nothing))
-                     ramAddrs
+    (rElems, snoopElems) =
+      unzip $ zipWith trueDualPortBlockRam
                      wCtrls
+                     snoopCtrls
+
     rOuts = unbundle $
             liftA2 rotateRight
                    (bundle $ reverse rElems)
                    rotVal
+    sOuts = unbundle $
+            liftA2 rotateRight
+                   (bundle $ reverse snoopElems)
+                   snoopRotVal
+
+
+
 
 -- | Parallel stack /with/ extra caching of top \( 2^p \) entries
 newCachedParStack
@@ -129,13 +149,14 @@ newCachedParStack
      ( KnownNat p
      , KnownNat d
      , NFDataX  a
+     , BitPack  a
      , HiddenClockResetEnable dom
      , 1 <= d
      , 1 <= d `Div` 2^p
      , 1 <= 2^p
      , p <= CLog 2 d )
   => ParStack dom a p d
-newCachedParStack ins = PSOut <$> sp <*> sp' <*> bundle cache
+newCachedParStack ins snoopAddr = PSOut <$> sp <*> sp' <*> out <*> fmap _snoops ramStack
   where
     -- Resolve input fields
     pushes   = unbundle (maybe (repeat Nothing) snd <$> ins)
@@ -143,14 +164,16 @@ newCachedParStack ins = PSOut <$> sp <*> sp' <*> bundle cache
     offsetExt = resize <$> offset :: Signal dom (Signed (1+CLog 2 d))
 
     -- Inst BRAM parallel stack
+    -- ramPushMask = imap (\i _ -> pure (resize $ bitCoerce i :: Signed (1+CLog 2 d)) .<. offsetExt .&&. offset .>. 0)
+    --                  (repeat ())
     ramPushMask = map (\i -> i .<. offsetExt .&&. offset .>. 0)
                       (iterateI (+1) 0)
-    ramPushes = zipWith (\m e -> mux m e (pure Nothing)) ramPushMask rotated
-    ramStack = newParStack @p @d (Just <$> bundle (offset, bundle ramPushes))
-    sp      = (\(PSOut x _ _) -> x) <$> ramStack
-    sp'     = (\(PSOut _ x _) -> x) <$> ramStack
-    ramOuts = unbundle $
-              (\(PSOut _ _ x) -> x) <$> ramStack
+
+    ramPushes = zipWith (\m e -> mux m (Just <$> e) (pure Nothing)) ramPushMask rotated
+    ramStack = newParStack @p @d (Just <$> bundle (offset, bundle ramPushes)) snoopAddr
+    sp      = _size  <$> ramStack
+    sp'     = _size' <$> ramStack
+    ramOuts = _tops <$> ramStack
 
     -- Rotated versions versions
     rotated = unbundle $
@@ -160,7 +183,7 @@ newCachedParStack ins = PSOut <$> sp <*> sp' <*> bundle cache
 
     ramTops = unbundle $
               liftA2 rotateRight
-                     (bundle ramOuts)
+                     ramOuts
                      offset
 
     -- Select source for each cache register
@@ -168,9 +191,10 @@ newCachedParStack ins = PSOut <$> sp <*> sp' <*> bundle cache
                              (iterateI (+1) 0)
     pushMask = map (fmap isJust) pushes
 
-    cache  = map (delay Nothing) cache'
-    cache' = zipWith5 (liftA5 choose) pushMask popMask rotated ramTops pushes
-    -- TODO What about Octostack's `f` parameter?
+    cache :: Vec (2^p) (Signal dom a) = map (delay (unpack 0)) cache'
+    cache' = zipWith5 (liftA5 choose) pushMask popMask rotated ramTops (map (fmap fromJust) pushes)
+
+    out = bundle cache
 
 choose :: Bool -> Bool -> p -> p -> p -> p
 --     psh? pop? rot  ram  push
@@ -196,4 +220,4 @@ wrapAddr :: forall d a dom
             , Num a
             , Ord a                      )
          => Signal dom a -> Signal dom a
-wrapAddr addr = wrapAt (snatToNum $ SNat @(d-1)) addr
+wrapAddr = wrapAt (snatToNum $ SNat @(d-1))

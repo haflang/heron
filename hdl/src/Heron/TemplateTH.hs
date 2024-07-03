@@ -1,22 +1,23 @@
 module Heron.TemplateTH where
 
-import Clash.Annotations.BitRepresentation.Deriving
-import Language.Haskell.TH as TH
-import Clash.Prelude (shiftL, shiftR, testBit, Bits)
-import Prelude
+import           Clash.Annotations.BitRepresentation.Deriving
+import           Clash.Prelude                                (Bits, shiftL,
+                                                               shiftR, testBit)
+import           Language.Haskell.TH                          as TH
+import           Prelude
 
 deriveTyConDefaultAnnotations:: Q TH.Type -> [(Integer,Integer)] -> Q [Dec]
 deriveTyConDefaultAnnotations tycon nats
   = do tycon' <- tycon
        let ty (a,b) = pure $ AppT (AppT tycon' (LitT (NumTyLit a))) (LitT (NumTyLit b))
-       ans <- traverse (\n -> deriveDefaultAnnotation (ty n)) nats
+       ans <- traverse (deriveDefaultAnnotation . ty) nats
        pure $ concat ans
 
 deriveTyConBitPacks :: Q TH.Type -> [(Integer,Integer)] -> Q [Dec]
 deriveTyConBitPacks tycon nats
   = do tycon' <- tycon
        let ty (a,b) = pure $ AppT (AppT tycon' (LitT (NumTyLit a))) (LitT (NumTyLit b))
-       bps <- traverse (\n -> deriveBitPack           (ty n)) nats
+       bps <- traverse (deriveBitPack . ty) nats
        pure $ concat bps
 
 -- | Generate bitmask from a given bit, with a certain size
@@ -31,7 +32,7 @@ bitmask start  size
   | start < 0        = error $ "Start cannot be <0. Was: " ++ show start
   | size < 0         = error $ "Size cannot be <0. Was: " ++ show size
   | start + 1 < size = error $ "Start + 1 (" ++ show start ++ " - 1) cannot be smaller than size (" ++ show size ++  ")."
-  | otherwise        = shiftL (2 ^(toInteger size) - 1) (start - (size - 1))
+  | otherwise        = shiftL (2 ^toInteger size - 1) (start - (size - 1))
 
 fieldmasks :: [Int] -> [Integer]
 fieldmasks = snd . go 0

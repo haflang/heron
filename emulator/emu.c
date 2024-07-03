@@ -141,8 +141,8 @@ Int nodeLen = APSIZE;
 
 /* Profiling info */
 
-Long swapCount, primCount, applyCount, unwindCount,
-  updateCount, selectCount, prsCandidateCount, prsSuccessCount, caseCount, heapWaitCount, inlineAltCount, heapAllocCount;
+Long swapCount, primCount, applyCount, unwindCount, heapUtilCount,
+  updateCount, selectCount, prsCandidateCount, prsSuccessCount, caseCount, heapWaitCount, inlineAltCount, heapAllocCount, immediateFreeCount;
 
 Int maxHeapUsage, maxStackUsage, maxUStackUsage, maxLStackUsage, maxPStackUsage;
 
@@ -593,8 +593,10 @@ void unwind(Bool sh, Int addr)
     ustack[usp++] = u;
     //printf("UPDATE = %5d%5d\n", sp, addr);
   }
-#if ONEBITGC_STUDY1
   if (!sh)
+    immediateFreeCount++;
+#if ONEBITGC_STUDY1
+    if (!sh)
     collectApp(addr);
 #endif
   dashApp(sh, &app);
@@ -645,12 +647,14 @@ void update(Atom top, Int saddr, Int haddr)
 
   for (;;) {
     if (len < nodeLen) {
+      heapUtilCount++;
       upd(top, p, len, haddr);
       usp--;
       return;
     }
     else {
       heapAllocCount++;
+      heapUtilCount++;
       upd(top, p, nodeLen, hp);
       p -= nodeLen-1; len -= nodeLen-1;
       top.tag = VAR; top.contents.var.shared = 1; top.contents.var.id = hp;
@@ -831,6 +835,7 @@ void instApp(Int base, App *app)
         new->atoms[i] = inst(base, app->atoms[i]);
       cachedWrite(hp, *new);
       heapAllocCount++;
+      heapUtilCount++;
       hp++;
     }
   }
@@ -843,6 +848,7 @@ void instApp(Int base, App *app)
     if (app->tag == AP) new->details.normalForm = app->details.normalForm;
     cachedWrite(hp, *new);
     heapAllocCount++;
+    heapUtilCount++;
     hp++;
   }
 }
@@ -939,8 +945,9 @@ Atom copyChild(Atom child)
     if (app.tag == COLLECTED)
         ++heap2[app.atoms[0].contents.var.id].refcnt;
 
-    if (isSimple(&app))
-      return app.atoms[0];
+    // We no longer use a compacting collector, so let's not inline simple atoms
+    // if (isSimple(&app))
+    //   return app.atoms[0];
 
     if (app.tag == COLLECTED) {
       // return app.atoms[0];
@@ -1068,7 +1075,7 @@ void init()
   stack[0] = mainAtom;
   swapCount = primCount = applyCount =
     unwindCount = updateCount = selectCount =
-      prsCandidateCount = prsSuccessCount = gcCount = caseCount = heapWaitCount = inlineAltCount = 0;
+      prsCandidateCount = prsSuccessCount = gcCount = caseCount = heapWaitCount = inlineAltCount = immediateFreeCount = 0;
   initProfTable();
 }
 
@@ -1113,14 +1120,14 @@ void dispatch()
 
     if (tracingEnabled) {
         printf("\nCycle %d h%d: ", stepno, hp);
-        //printf("Heap  : %d", hp);
-        //for (int i = 0; i < hp; ++i)
-        //    if (heap[i].tag < COLLECTED) {
-        //        putchar(' ');
-        //        showApp(i);
-        //    }
-        //printf("\n");
-        //printf("Stack :");
+        printf("Heap  : %d", hp);
+        for (int i = 0; i < hp; ++i)
+            if (heap[i].tag < COLLECTED) {
+                putchar(' ');
+                showApp(i);
+            }
+        printf("\n");
+        printf("Stack :");
         for (int i = sp - 1; i >= 0; --i) {
             showAtom(stack[i]);
             putchar(' ');
@@ -1160,6 +1167,7 @@ void dispatch()
 
     top = stack[sp-1];
     if (top.tag == VAR) {
+      heapUtilCount++;
       unwind(top.contents.var.shared, top.contents.var.id);
       unwindCount++;
     }
@@ -1466,6 +1474,8 @@ int main(int argc, char *argv[])
       printf("#Cases      = %12lld\n", caseCount);
       printf("#Templates  = %12d\n", numTemplates);
       printf("#Allocs     = %12lld\n", heapAllocCount);
+      printf("#ImmediateFrees = %12lld\n", immediateFreeCount);
+      printf("Heap Util   = %11lld%%\n", (100*heapUtilCount)/(ticks*MAXAPS));
       printf("Max Heap    = %12d\n", maxHeapUsage);
       printf("Max Stack   = %12d\n", maxStackUsage);
       printf("Max UStack  = %12d\n", maxUStackUsage);

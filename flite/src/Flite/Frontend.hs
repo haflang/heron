@@ -25,7 +25,7 @@ frontend strictAnan nregs i p =
 
 frontendM :: Bool -> Int -> (InlineFlag, InlineFlag) -> Prog -> Fresh Prog
 frontendM strictAnan nregs (h, i) p =
-  do p0 <- desugarCase (identifyFuncs p) >>= desugarEqn
+  do p0 <- desugarCase (concatPatApps $ identifyFuncs p) >>= desugarEqn
      let sii = strictIntInfo p0
      p1 <- inlineLinearLet (concatApps p0)
              >>= inlineSimpleLet
