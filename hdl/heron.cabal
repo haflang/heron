@@ -107,6 +107,7 @@ library
   build-depends:
     barbies,
     barbies-th,
+    bytestring,
     clash-ghc,
     containers,
     directory,

@@ -1,14 +1,14 @@
 module Flite.Flatten (flatten) where
 
-import Flite.Syntax
-import Flite.WriterState
-import Data.List
-import Flite.Traversals
-import Control.Monad
+import           Control.Monad
+import           Data.List
+import           Flite.Syntax
+import           Flite.Traversals
+import           Flite.WriterState
 
 expToApp :: Exp -> App
 expToApp (App e es) = e:es
-expToApp e = [e]
+expToApp e          = [e]
 
 apLen = length . expToApp
 
@@ -30,13 +30,27 @@ flatten e
     vs = map fst binds
 
 flattenSpine :: Exp -> Flatten App
-flattenSpine (App (Fun p) (a:rest))
-  | isUnaryPrim p
+-- unwrap (for worker/wrapper):
+--   * 1st arg can be flattened app
+--   * 2nd must be an atom
+flattenSpine (App (Fun "unwrap") (a:rest))
   = do a'    <- flattenSpine a
        rest' <- mapM flattenExp rest
-       return $ a' ++ [Fun p] ++ rest'
+       return $ a' ++ [Fun "unwrap"] ++ rest'
+-- par and seq applications:
+--   * 1st arg must be an atom
+--   * 2nd can be a flattened app
 flattenSpine (App (Fun p) (a:b:rest))
-  | isBinaryPrim p
+  | p == "par" || p == "seq"
+  = do a'    <- flattenExp a
+       b'    <- flattenSpine b
+       rest' <- mapM flattenExp rest
+       return $ a' : Fun p : b' ++ rest'
+-- All other binary prim ops:
+--   * both args can be flattened apps
+--     (thanks to postfix notation)
+flattenSpine (App (Fun p) (a:b:rest))
+  | isPredexId p
   = do a'    <- flattenSpine a
        b'    <- flattenSpine b
        case rest of
@@ -57,16 +71,22 @@ flattenSpine (Let bs e) =
 flattenSpine e = (:[]) `fmap` flattenExp e
 
 flattenExp :: Exp -> Flatten Exp
-flattenExp (App (Fun p) (a:rest))
-  | isUnaryPrim p =
+flattenExp (App (Fun "unwrap") (a:rest)) =
   do i <- fresh
      a' <- flattenSpine a
      rest' <- mapM flattenExp rest
-     write(i, a' ++ [Fun p] ++ rest')
+     write(i, a' ++ [Fun "unwrap"] ++ rest')
+     return (Var i)
+flattenExp (App (Fun p) (a:rest))
+  | p == "par" || p == "seq" =  do
+     i <- fresh
+     a' <- flattenExp a
+     rest' <- mapM flattenExp rest
+     write(i, a' : Fun p : rest')
      return (Var i)
 -- FIXME I've hardcoded this for APLEN=4 for heap aps... Naughty
 flattenExp (App (Fun p) (a:b:rest))
-  | isBinaryPrim p && (apLen a + apLen b < 4) =
+  | isPredexId p && (apLen a + apLen b < 4) =
   do i <- fresh
      a' <- flattenSpine a
      b' <- flattenSpine b
@@ -102,10 +122,10 @@ flattenExp e = return e
 
 freshLet :: ([Binding], Exp) -> Flatten ([Binding], Exp)
 freshLet (bs, e) =
-  do ws <- mapM (\_ -> fresh) vs
+  do ws <- mapM (const fresh) vs
      let s = zip (map Var ws) vs
      let e' = substMany e s
-     let es' = map (flip substMany s) es
+     let es' = map (`substMany` s) es
      return (zip ws es', e')
   where
     (vs, es) = unzip bs

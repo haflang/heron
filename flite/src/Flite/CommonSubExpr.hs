@@ -1,14 +1,14 @@
 module Flite.CommonSubExpr(elimCommonSubExpr) where
 
-import Flite.Dependency
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.Fresh
-import Flite.Pretty
-import Data.List
-import Data.Maybe
-import Control.Applicative
+import           Control.Applicative
+import           Data.List
+import           Data.Maybe
+import           Flite.Dependency
+import           Flite.Descend
+import           Flite.Fresh
+import           Flite.Pretty
+import           Flite.Syntax
+import           Flite.Traversals
 
 {-
 
@@ -25,10 +25,8 @@ If we ignore any partial applications, this becomes:
   to instantiate something on the spine _and_ the heap, so let's ignore that.
 
 Do 1) until we hit a fixed point.
-<<<<<<< HEAD
+
 Probably best to start with some toy examples.
-=======
->>>>>>> 8ad5b30 (Update hdl benchmarks)
 
 -}
 
@@ -37,7 +35,7 @@ duplicateBinding bs b = annotate <$> dup
   where
     bs' = filter ((/= b) . fst) bs
     e   = fromJust $ lookup b bs
-    dup = listToMaybe $ filter ((e ==) . snd) bs'
+    dup = find ((e ==) . snd) bs'
     annotate (d,_) = (b,d)
 
 elimCommonSubExpr :: [(Id, App)] -> [(Id, App)]

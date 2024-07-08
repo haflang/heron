@@ -10,18 +10,19 @@ module Flite.Dependency
   , joinGraph    -- :: DepGraph -> (Id, [Id]) -> ((Id, [Id]), Bool)
   ) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Data.List
+import           Data.List
+import           Data.Maybe
+import           Flite.Syntax
+import           Flite.Traversals
 
 -- Depdendency graphs
 type DepGraph = [(Id, [Id])]
 
 depends :: DepGraph -> Id -> [Id]
-depends g f = case lookup f g of { Nothing -> [] ; Just gs -> gs }
+depends g f = fromMaybe [] (lookup f g)
 
 closure :: DepGraph -> DepGraph
-closure g = fixPoint step g
+closure = fixPoint step
 
 step :: DepGraph -> Maybe DepGraph
 step g
@@ -38,7 +39,7 @@ fixPoint f a = case f a of { Nothing -> a ; Just b -> fixPoint f b }
 
 -- For each function, determine all functions it calls
 callGraph :: [Decl] -> DepGraph
-callGraph p = (zip fs cs)
+callGraph p = zip fs cs
   where
     fs = map funcName p
     cs = map (nub . calls . funcRhs) p
@@ -46,7 +47,7 @@ callGraph p = (zip fs cs)
 -- For each function, determine all functions it _might_ call
 -- (includes case alternatives)
 maybeCallGraph :: [Decl] -> DepGraph
-maybeCallGraph p = (zip fs cs)
+maybeCallGraph p = zip fs cs
   where
     fs = map funcName p
     cs = map (nub . maybeCalls . funcRhs) p
@@ -91,4 +92,4 @@ lookupBinding :: [(Id, Exp)] -> Id -> (Id, Exp)
 lookupBinding bs w =
   case lookup w bs of
     Nothing -> error "Dependency: lookupBinding"
-    Just e -> (w, e)
+    Just e  -> (w, e)

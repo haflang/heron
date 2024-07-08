@@ -32,7 +32,7 @@ set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.TCL.POST [get_files ./rqs/idr_pr_p
 set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
 
 # Synthesise
-launch_runs impl_1 -jobs 6
+launch_runs impl_1 -jobs 1
 wait_on_run impl_1
 
 # Report

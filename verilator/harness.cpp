@@ -8,9 +8,9 @@ using namespace std;
 
 // Here are our interface lists for _one_ configuration... how to do we
 // automatically generalise for the code data and gc threshold widths?
-#define TEMPLATE_SZ 326
+#define TEMPLATE_SZ 361
 #define GC_THRES 1000
-#define WORDS_PER_TEMPLATE 11
+#define WORDS_PER_TEMPLATE 12
 #define ERR_HEAP_FULL 0x27ffc
 
 vluint64_t main_time = 1;       // Current simulation time
@@ -35,7 +35,9 @@ void reset(VtopEntity *top) {
 
   // Lower reset
   top->rst = 0;
-  for(int i=0; i<=30; i++){
+  // FIXME Why do we need this additional wait to avoid counting init time as GC
+  // wait cycles?
+  for(int i=0; i<=32*1024; i++){
     top->clk = 0;
     top->eval();
     top->clk = 1;
@@ -107,7 +109,7 @@ void report(VtopEntity *top) {
   if (ret == ERR_HEAP_FULL)
     cout << "Failed with ERR_HEAP_FULL" << endl;
   else
-    cout << "Returned " << (ret & 0x7FFF) << endl;
+    cout << "Returned " << (ret >> 3 & 0x7FFF) << endl;
 
   cout << "Mutator cycles = "          << mutCycles    << endl
        << "GC root id cycles = "       << gcRootCycles << endl

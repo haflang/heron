@@ -8,10 +8,14 @@ type Index = Int
 
 type Shared = Bool
 
+type Seq = Bool
+
+type Par = Bool
+
 data Atom =
     INT Int
-  | ARG Shared Int
-  | VAR Shared Int
+  | ARG Shared Seq Par Int
+  | VAR Shared Seq Par Int
   | REG Shared Int
   | CON Arity Index
   | FUN Bool Arity Id
@@ -50,9 +54,30 @@ appAtoms (CASE _ as) = as
 appAtoms (PRIM _ as) = as
 
 isFUN :: Atom -> Bool
-isFUN (FUN _ _ _) = True
-isFUN           _ = False
+isFUN (FUN {}) = True
+isFUN        _ = False
 
 isVAR :: Atom -> Bool
-isVAR (VAR _ _) = True
-isVAR        _  = False
+isVAR (VAR {}) = True
+isVAR       _  = False
+
+-- Pretty print
+
+pretty :: Int -> Template -> String
+pretty i (f, a, alts, stk, aps) = unlines $ lhs : body ++ ct ++ [""]
+  where
+    ind  = "  "
+    lhs  = f ++ " @" ++ show i ++ " |" ++ show a ++ "| = "
+    ct   | null alts = []
+         | otherwise
+         = [ind ++ " of <" ++ show alts ++ ">"]
+    body | null aps
+         = [ind ++ show stk]
+         | otherwise
+         = zipWith (++)
+             (           (ind ++ "let 0 -> ") :
+               map (\n -> ind ++ "    " ++ show n ++ " -> ")
+                   [1 :: Integer ..]
+             )
+             (map show aps)
+           ++ [ind ++ " in " ++ show stk]

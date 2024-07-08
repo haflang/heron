@@ -38,6 +38,7 @@ module Heron.Parameters
   , KnownHeapArch
   , specialiseHeap
   , heapConfig
+
   ) where
 
 import           Clash.Prelude

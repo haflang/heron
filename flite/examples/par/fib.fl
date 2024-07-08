@@ -1,0 +1,28 @@
+main = pfib 6
+
+pfib n =
+  if n <= 1
+     then 1
+     else let n1 = pfib (n - 1)
+              n2 = pfib (n - 2)
+          in n1 `par` (n2 `par` n1 + n2)
+
+{-
+
+Version with bounded sparking below
+
+fib :: Int -> Int
+fib n
+    | n <= 1 = n
+    | otherwise = fib (n-1) + fib (n-2)
+
+pfib :: Int -> Int -> Int
+pfib 1 n = fib n
+pfib p n
+    | n <= 1 = n
+    | otherwise = n1 `par` (n2 `par` n1 + n2)
+        where
+            n1 = pfib (p - 1) (n - 1)
+            n2 = pfib (p - 1) (n - 2)
+
+-}

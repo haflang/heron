@@ -74,4 +74,4 @@ newFifo initWrp ramPrim inps = FOut <$> sz <*> top
     ramWrite = liftA2 (\x y -> fmap (const (y, x)) x) mpush wrp
 
     -- Gather RAM outputs
-    top = readNew ramPrim rdp' ramWrite
+    top = mux (sz .>. 0) (readNew ramPrim rdp' ramWrite) (pure Nothing)

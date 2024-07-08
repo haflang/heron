@@ -31,26 +31,35 @@ encOpcode "(-)"  = T.OpSub
 encOpcode "(==)" = T.OpEq
 encOpcode "(/=)" = T.OpNeq
 encOpcode "(<=)" = T.OpLeq
-encOpcode "(!)"  = T.OpSeq
+encOpcode "unwrap" = T.OpUnwrap
 encOpcode f      = error $ "Encode.encOpcode: Invalid primitive op " ++ f
 
 encAtom :: Atom -> T.Atom
 encAtom (INT n)
   | inRange @T.PInt n
   = T.PrimInt $ fromIntegral n
-encAtom (ARG s n)
+encAtom (ARG s doSeq doPar n)
   | inRange @T.ArgIndex n
-  = T.Arg s $ fromIntegral n
-encAtom (VAR s n)
+  = T.Arg tag $ fromIntegral n
+  where
+    tag | doPar     = T.PPar
+        | doSeq     = T.PSeq
+        | s         = T.PShared
+        | otherwise = T.PUniq
+encAtom (VAR s doSeq doPar n)
   | inRange @T.HeapAddr n' &&
     n <  C.snatToNum (C.SNat @MaxAps) &&
     n >= negate (C.snatToNum $ C.SNat @MaxApSpan)
-  = T.Ptr s $ fromIntegral n'
+  = T.Ptr tag $ fromIntegral n'
   where
     -- Negative relative offsets are all allowed for reference between split
     -- templates. If we alter encoding now, this resolves silently in the circuit
     n' = if n < 0 then n + 1 + fromIntegral (maxBound :: T.HeapAddr)
                   else n
+    tag | doPar     = T.PPar
+        | doSeq     = T.PSeq
+        | s         = T.PShared
+        | otherwise = T.PUniq
 encAtom (REG s n)
   | inRange @T.RegIndex n
   = T.Reg s $ fromIntegral n
@@ -104,7 +113,7 @@ encAlt (p, INT val)
   | inRange @T.FnArity p &&
     inRange @T.ShortInt val
   = T.AInt (fromIntegral p) (fromIntegral val)
-encAlt (p, ARG _ idx)
+encAlt (p, ARG  _ _ _ idx)
   | inRange @T.FnArity p &&
     inRange @T.ArgIndex idx
   = T.AArg (fromIntegral p) (fromIntegral idx)

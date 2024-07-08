@@ -19,6 +19,7 @@ module Heron.Core.Core
   , CPUOut(..)
   , CPUStats(..)
   , Phase(..)
+  , Update(..)
   , cpu
   ) where
 
@@ -30,7 +31,7 @@ import           Control.Lens                                 hiding (Index,
                                                                assign, at, imap,
                                                                op, (:>))
 import           Control.Monad.State                          hiding (fail)
-import           Data.Maybe                                   (fromMaybe)
+import           Data.Maybe                                   (fromMaybe, fromJust, isJust)
 import qualified Prelude                                      as P
 import           RetroClash.Barbies
 import           RetroClash.CPU                               hiding (update)
@@ -48,11 +49,21 @@ import           Heron.Template
 
 -- CPU data types
 
+data Update = Update
+  { uAddr :: HeapAddr
+  -- ^ Address to be updated with WHNF
+  , uSp   :: Index VStkSize
+  -- ^ Pointer to the root of this application on the stack
+  , uDiscard :: Bool
+  -- ^ Do we want to discard or keep the WHNF on the stack after evaluation?
+  -- Performing SEQ needs the discard.
+  } deriving (Show, ShowX, Generic, NFDataX, BitPack)
+
 -- | CPU input record. Includes outputs from all memory components, and a
 -- `begin` trigger.
 declareBareB [d|
   data CPUIn = CPUIn
-    { uStkIn :: SOut    (Index VStkSize, HeapAddr) UStkSize
+    { uStkIn :: SOut    Update                     UStkSize
     -- ^ Size and head of update stack
     , aStkIn :: SOut    (CaseTable UnpackedAlt   ) AStkSize
     -- ^ Size and head of case alternative stack
@@ -70,7 +81,7 @@ declareBareB [d|
     -- ^ Command requested from GC core. Required to stall mutator when heap is
     -- full or ask the mutator to dump the graph roots when starting a GC pass.
     -- ^ Size and head of parallel value stack
-    , begin     :: Maybe   TemplAddr
+    , begin     :: Maybe   Atom
     -- ^ Start reduction of main function
     } |]
 deriving instance Generic (Pure CPUIn)
@@ -117,11 +128,25 @@ makeLenses ''CPUStats
 initCPUStats :: CPUStats
 initCPUStats = CPUStats 0 0 0 0
 
+-- | Current CPU execution phase
+data Phase
+  = Init      -- ^ Initialising
+  | Starting  -- ^ Waiting for initialisation
+  | Reduce    -- ^ Performing reductions
+  | Stall     -- ^ Stalling until heap port becomes available
+  | GCStall   -- ^ Stalling until heap space is freed
+  | Halt      -- ^ Finished reducing
+  | DumpRoots -- ^ Dumping GC roots from primary stack
+  | ContinueUpdate -- ^ Extra cycle needed for wide updates
+  deriving (Show, Generic, NFDataX, Enum, Bounded, Eq, ShowX)
+deriveAnnotation (simpleDerivator OneHot OverlapL) [t| Phase |]
+deriveBitPack [t| Phase |]
+
 -- | CPU output record. Includes inputs for all memory components, and the
 -- `_result` node.
 declareBareB [d|
   data CPUOut = CPUOut
-    { _uStkPush  :: Maybe (Index VStkSize, HeapAddr)
+    { _uStkPush  :: Maybe Update
     -- ^ Push element to update stack
     , _uStkPop   :: Bool
     -- ^ Pop element from update stack
@@ -146,7 +171,9 @@ declareBareB [d|
     , _allocBubble :: Bool
     -- ^ A flag raised when we are certain no allocations will happen on the next cycle
     , _result    :: (CPUStats, Maybe Atom)
-    -- ^ The final result. Always a single primitive integer on success.
+    -- ^ The final result. Will return single-atom NFs directly, or a heap
+    -- pointer to larger WHNFs.
+    , _mutPhase :: Phase
     } |]
 makeLenses ''CPUOut
 deriving instance Generic (Pure CPUOut)
@@ -162,6 +189,8 @@ instance Show (Pure CPUOut) where
     , "  heap  = " P.++ show _heapOut
     , "  tmpl  = " P.++ show _tmplOut
     , "  gcReq = " P.++ show _gcRequest
+    , "  bubbl = " P.++ show _allocBubble
+    , "  phase = " P.++ show _mutPhase
     , "  res   = " P.++ show _result
     ]
 instance ShowX (Pure CPUOut) where
@@ -174,22 +203,10 @@ instance ShowX (Pure CPUOut) where
     , "  heap  = " P.++ showX _heapOut
     , "  tmpl  = " P.++ showX _tmplOut
     , "  gcReq = " P.++ showX _gcRequest
+    , "  bubbl = " P.++ showX _allocBubble
+    , "  phase = " P.++ showX _mutPhase
     , "  res   = " P.++ showX _result
     ]
-
--- | Current CPU execution phase
-data Phase
-  = Init      -- ^ Initialising
-  | Starting  -- ^ Waiting for initialisation
-  | Reduce    -- ^ Performing reductions
-  | Stall     -- ^ Stalling until heap port becomes available
-  | GCStall     -- ^ Stalling until heap space is freed
-  | Halt      -- ^ Finished reducing
-  | DumpRoots -- ^ Dumping GC roots from primary stack
-  | ContinueUpdate -- ^ Extra cycle needed for wide updates
-  deriving (Show, Generic, NFDataX, Enum, Bounded, Eq)
-deriveAnnotation (simpleDerivator OneHot OverlapL) [t| Phase |]
-deriveBitPack [t| Phase |]
 
 data CPUState = CPUState
   { _phase         :: Phase
@@ -203,6 +220,7 @@ data CPUState = CPUState
   , _wideUpd       :: (HeapAddr, HeapNode)
   , _stats         :: CPUStats
   , _curStall      :: Unsigned 32
+  , _reservedAddr  :: Maybe HeapAddr
   }
   deriving (Generic, NFDataX)
 makeLenses ''CPUState
@@ -220,6 +238,7 @@ initCPUState = CPUState
   , _stalls = 0
   , _stats = initCPUStats
   , _curStall = 0
+  , _reservedAddr = Nothing
   }
 
 defaultOutput :: CPUState -> Pure CPUOut
@@ -237,6 +256,7 @@ defaultOutput CPUState{..} = CPUOut
   , _gcRequest = RNothing
   , _allocBubble = hasBubble _top'
   , _result  = (_stats, Nothing)
+  , _mutPhase = _phase
   }
   where
     heapOp = maybe (repeat RamNoOp) (\a -> repeat RamNoOp ++ singleton (RamRead a)) . heapAddr
@@ -270,18 +290,19 @@ step ins@CPUIn{..} =
   use phase >>= \case
     Halt   -> do
       s <- use stats
-      result .:= (s, Just . head $ read vStkIn)
+      let ret = head (read vStkIn)
+      result .:= (s, Just ret)
       gcRequest .:= RFinished
       phase   .= Init
     Init   ->
-      case begin of
-        Nothing       -> pure ()
-        Just initAddr ->
-          phase .= Starting >>
-          stats .= initCPUStats >>
-          updateV 0 (Just (Fun 0 initAddr True) :> repeat Nothing)
-    Starting -> do
-      unless pause (phase .= Reduce)
+      updateV 0 (repeat $ Just $ Fun 0 0 True) >>
+      stats .= initCPUStats >>
+      unless pause (
+        phase .= Starting >>
+        allocBubble .:= False >>
+        reservedAddr .= Nothing
+      )
+    Starting -> starting ins
     Stall ->
       stats . mutCycles %= (+1) >>
       stall
@@ -294,7 +315,6 @@ step ins@CPUIn{..} =
       curStall %= (+1) >>
       if fail  then updateV 1 (Just gcErrCode :> repeat Nothing) >>
                     phase .= Halt else
-      if halt  then phase .= Halt else
       if pause then phase .= GCStall >>
                     stats . gcWaitCycles %= (+1) else
       if gc    then phase .= DumpRoots >>
@@ -310,22 +330,56 @@ step ins@CPUIn{..} =
       dumpRoots ins
     ContinueUpdate ->
       stats . gcWaitCycles %= (+1) >>
-      continueUpdate
+      continueUpdate ins
   where
     fail     = gcCmd == FailCmd
     pause    = gcCmd == WaitCmd
     gc       = gcCmd == RootsCmd && safeInterrupt
-    halt     = size vStkIn < 1 && isInt (top vStkIn)
     safeInterrupt = canGC $ top vStkIn
     gcErrCode = Con maxBound maxBound
     latchMaxStall = do n <- use curStall
                        stats . maxStall %= max n
 
+starting :: Pure CPUIn -> CPU ()
+starting CPUIn {..} = do
+  allocBubble .:= False
+  startAddr <- reserveAddress
+
+  case begin of
+    Nothing -> return ()
+    Just root -> do
+      let retAddr = fromMaybe startAddr (heapAddr root)
+      go retAddr False
+      updateV 0 (Just (dash root) :> repeat Nothing)
+
+  where
+    -- Make sure we have a starting address reserved
+    reserveAddress = use reservedAddr >>= \case
+      Just a  -> pure a
+      Nothing -> do
+        let addr = head nextAddrs
+        gcRequest .:= RAlloc (True :> repeat False)
+        reservedAddr .= Just addr
+        updateV 1 (Just (Ptr PUniq addr) :> repeat Nothing)
+        heapOut .:= RamWrite addr (App False 0 $ repeat Nothing) :> repeat RamNoOp
+        -- ^ If we don't write to the address Clash might give us uninitialised error
+        pure addr
+
+    -- Generic start operations
+    go addr discard = do
+      pushU $ Update { uAddr = addr
+                     , uSp = 1
+                     , uDiscard = discard
+                     }
+      phase .= Reduce
+      reservedAddr .= Nothing
+      stalls .= 0
+
 -- Dispatch for reduction rules
 
 reduce :: Atom -> Pure CPUIn -> CPU ()
 reduce t ins
-  | needsUnwind t      = unwind ins
+  | needsUnwind t      = unwind t ins
   | needsUpdate t  ins = update ins
   | needsUnfold t  ins = unfold ins
 reduce (Con   _ _) ins = caseSelect ins
@@ -336,36 +390,40 @@ reduce t _   =
 -- Reduction rules
 
 -- Unwind a heap application onto the stack
-unwind :: Pure CPUIn -> CPU ()
-unwind CPUIn{..} =
-  do t <- use top'
+unwind :: Atom -> Pure CPUIn -> CPU ()
+unwind (Ptr tag haddr) CPUIn{..} = do
+  -- Node to unwind is either forwarded via CPUState or prefetched from heap.
+  fwd <- use forwardedNode
+  forwardedNode .= Nothing
+  let shared = isTagShared tag
+  let doSeq  = tag == PSeq
+  let doPar  = tag == PPar
+  let node   = fromMaybe (last $ read heapIn) fwd
+  let unode  = unpackNode shared node
+  let offset = (unpack . resize . pack $ nArity unode) - 1
+  let as     = map (fmap (dashIf shared)) (nAtoms unode)
 
-     let haddr = case heapAddr t of
-                   Nothing -> errorX "Heron.Core.Core.unwind: Found empty heap address"
-                   Just x  -> x
-     let shared = isShared t
+  -- Possibly register update address
+  when (nUpdatable unode && not doPar) $
+        pushU $ Update { uAddr    = haddr
+                       , uSp      = size vStkIn
+                       , uDiscard = doSeq
+                       }
 
-     -- Node to unwind is either forwarded via CPUState or prefetched from heap.
-     fwd <- use forwardedNode
-     forwardedNode .= Nothing
-     let node = fromMaybe (last $ read heapIn) fwd
-     let unode = unpackNode shared node
+  -- Possibly register case table
+  forM_ (nCaseTable unode) (unless doPar . pushA)
 
-     -- Possibly register update address
-     when (nUpdatable unode)
-          (pushU (size vStkIn, haddr))
+  -- Free any non-shared unwound apps
+  unless shared
+         (gcRequest .:= RDealloc haddr)
 
-     -- Possibly register case table
-     forM_ (nCaseTable unode) pushA
-
-     -- Free any non-shared unwound apps
-     unless shared
-          (gcRequest .:= RDealloc haddr)
-
-     -- Push atoms onto stack
-     let offset = (unpack . resize . pack $ nArity unode) - 1
-     updateV offset
-             (map (fmap (dashIf shared)) (nAtoms unode))
+  -- Update main stack
+  if doPar || doSeq && not (nUpdatable unode)
+    then updateV (-1) (repeat Nothing) >>
+         top' .= at d1 (read vStkIn) -- Ignore SEQs for non-updatable apps
+    else updateV offset as           -- Unwind onto stack
+  -- Sparking a Par subject is not yet implemented
+unwind t _ = errorX $ "Heron.Core.Core.unwind: Cannot unwind a non-ptr: " P.++ show t
 
 -- Perform primitive operations
 prim :: Pure CPUIn -> CPU ()
@@ -387,12 +445,12 @@ prim CPUIn{..} =
       pushP x >>
       updateV (-1) (Just y :> repeat Nothing)
 
-    -- Special case for SEQ
-    Seq x f ->
+    -- Special case for unwrapping (used in worker/wrapper optimisation)
+    Unwrap x f ->
       updateV (-1) (Just f :> Just (PrimInt x) :> repeat Nothing)
 
     -- Unexpected prim op pattern
-    NotPrim -> error $ "Core.Core.prim: Malformed args on value stack: " <> show (read vStkIn)
+    NotPrim -> errorX $ "Core.Core.prim: Malformed args on value stack: " <> show (read vStkIn)
   where
     doOp op swp a b = alu $ AluIn op swp a b
 
@@ -401,7 +459,7 @@ update :: Pure CPUIn -> CPU ()
 update CPUIn{..} = case read uStkIn of
   Nothing ->
     error "Core.Core.update: Read from empty update stack"
-  Just (_,uAddr) -> do
+  Just u -> do
 
     --Dash the NF application on the stack, marking it as possibly shared
     let stkAs   = read vStkIn
@@ -409,25 +467,35 @@ update CPUIn{..} = case read uStkIn of
     let stkAs'  = imap (\i a -> if i < resize nfArity
                                   then Just (dash a)
                                   else Nothing) stkAs
-    updateV 0 stkAs'
+    let finish = size uStkIn <= 1
+    let ua = uAddr u
     popU
+
+    if uDiscard u
+      then let offset = resize . bitCoerce $ 1 + size vStkIn - uSp u
+               t = read vStkIn !! offset
+           in updateV (negate offset) (repeat Nothing) >>
+              top' .= t >>
+              when (isJust (heapAddr t)) (phase .= Stall)
+              -- ^ If we're discarding this update, we might force a new heap pointer onto the top of stack.
+              -- This needs prefetching, but we don't have any ports free...
+              -- BUG This won't work for wide nodes!
+      else updateV 0 stkAs'
+
 
     -- Write the normal form to heap
     if nfArity <= nodeLen
 
       -- Small normal form: Fits in one heap node
-      then
-        let n = App True (resize nfArity) (takeI stkAs') in
-        if gcCmd == UpdateBarrierCmd
-          then
-            specialiseHeap heapConfig
-              -- UltraRAM
-              (heapOut .:= RamRead uAddr :> RamWrite uAddr n :> repeat RamNoOp)
-              -- BlockRAM
-              (heapOut .:= RamWrite uAddr n                  :> repeat RamNoOp) >>
-            updateAddr .:= Just uAddr
-          else
-            heapOut .:= RamNoOp       :> RamWrite uAddr n :> repeat RamNoOp
+      then do
+        when finish (phase .= Halt)
+        let n = App True (resize nfArity) (takeI stkAs')
+        specialiseHeap heapConfig
+          -- UltraRAM
+          (heapOut .:= RamRead ua :> RamWrite ua n :> repeat RamNoOp)
+          -- BlockRAM
+          (heapOut .:= RamWrite ua n                  :> repeat RamNoOp)
+        updateAddr .:= Just ua
 
       -- Large normal form: Split into two heap nodes
       -- e.g. NF [a,b,c,d,e,f] -> x |-> [a,b,c,d]; y |-> [@x, e, f]
@@ -435,26 +503,23 @@ update CPUIn{..} = case read uStkIn of
       -- are either function apps, constructor apps, prim op apps, or integers.
       -- Function and constructor cases are already handled.
       -- Prim ops and ints are never wide enough to merit an allocation during update.
-      else
+      else do
         let n1 = App True (resize nodeLen) (takeI stkAs')
             n1Addr = head nextAddrs
             n2Args = takeI $ dropI @NodeLen stkAs' ++
                              repeat @NodeLen Nothing
             n2 = App True (resize $ nfArity + 1 - nodeLen)
-                     (Just (Ptr True n1Addr) :> n2Args)
-        in gcRequest .:= RAlloc (True :> repeat False) >>
-           if gcCmd == UpdateBarrierCmd
-             then
-               specialiseHeap heapConfig
-                 -- UltraRAM
-                 (wideUpd .= (n1Addr, n1)   >>
-                  phase   .= ContinueUpdate >>
-                  heapOut .:= RamRead uAddr :> RamWrite uAddr n2 :> repeat RamNoOp)
-                 -- BlockRAM
-                 (heapOut .:= RamWrite uAddr n2 :> RamWrite n1Addr n1 :> repeat RamNoOp) >>
-               updateAddr .:= Just uAddr
-             else
-               heapOut .:= RamWrite uAddr n2 :> RamWrite n1Addr n1 :> repeat RamNoOp
+                     (Just (Ptr PShared n1Addr) :> n2Args)
+        gcRequest .:= RAlloc (True :> repeat False)
+        specialiseHeap heapConfig
+          -- UltraRAM
+          (wideUpd .= (n1Addr, n1)   >>
+           phase   .= ContinueUpdate >>
+           heapOut .:= RamRead ua :> RamWrite ua n2 :> repeat RamNoOp)
+          -- BlockRAM
+          (when finish (phase .= Halt) >>
+           heapOut .:= RamWrite ua n2 :> RamWrite n1Addr n1 :> repeat RamNoOp)
+        updateAddr .:= Just ua
   where
     nodeLen = snatToNum (SNat @NodeLen)
 
@@ -507,7 +572,7 @@ unfold CPUIn{..} =
      -- let heapWrs = foldl shiftHeapOps (repeat Nothing) (reverse hWrs)
      prevAllocs <- use allocs
      allocs .= foldl shiftAllocBuf prevAllocs hWrs
-     arbitrateHeap readCtrl hWrs
+     arbitrate readCtrl hWrs
      gcRequest .:= RAlloc (map wr hWrs)
   where
     newTmplChain (Fun _ _ False) = False
@@ -520,7 +585,7 @@ unfold CPUIn{..} =
         -- If arguments are ints, reduce op now; no heap allocation
         Just (x, op, y) -> (Just (reg, alu $ AluIn op False x y), RamNoOp)
         -- Otherwise, dump onto heap
-        Nothing -> (Just (reg, Ptr False addr), RamWrite addr (App False 3 (as ++ repeat Nothing)))
+        Nothing -> (Just (reg, Ptr PUniq addr), RamWrite addr (App False 3 (as ++ repeat Nothing)))
     allocAp addr (Just app) = (Nothing, RamWrite addr app)
     allocAp _ Nothing = (Nothing, RamNoOp)
 
@@ -534,7 +599,7 @@ unfold CPUIn{..} =
     isNoOp _       = False
 
     -- If we can't prefetch from the heap, we might need to stall
-    arbitrateHeap rd wrs = do
+    arbitrate rd wrs = do
       let (opDo, opSkip) = orderRamOp (last wrs) rd
       heapOut .:= (init wrs ++ singleton opDo)
       phase .= if isNoOp opSkip then Reduce else Stall
@@ -548,7 +613,7 @@ unfold CPUIn{..} =
 -- Instantiate simple, non-function valued inline case alternatives
 caseSelect :: Pure CPUIn -> CPU ()
 caseSelect CPUIn{..} =
-  do let args = takeI @CMaxPush (read vStkIn)
+  do let args = takeI @CMaxPush $ read vStkIn
      let ct   = _top aStkIn
      t <- use top'
      popA
@@ -572,11 +637,13 @@ dumpRoots CPUIn{..} =
      when (gcCmd /= RootsCmd)
           (phase .= Reduce)
 
-continueUpdate :: CPU ()
-continueUpdate = do
+continueUpdate :: Pure CPUIn -> CPU ()
+continueUpdate CPUIn{..} = do
+  let finish = size uStkIn == 0
   (addr, node) <- use wideUpd
   heapOut .:= RamWrite addr node :> repeat RamNoOp
-  phase .= Reduce
+  if finish then phase .= Halt
+            else phase .= Reduce
 
 stall :: CPU ()
 stall = use stalls >>= \case
@@ -586,15 +653,15 @@ stall = use stalls >>= \case
 -- Helper functions
 
 needsUnwind :: Atom -> Bool
-needsUnwind (Ptr _ _) = True
-needsUnwind _         = False
+needsUnwind (Ptr {}) = True
+needsUnwind _        = False
 
 needsUpdate :: Atom -> Pure CPUIn -> Bool
 needsUpdate t CPUIn{..}
   = maybe False go (read uStkIn)
   where
-    go (uLen, _)
-      = resize (atomArity t) > satSub SatBound (size vStkIn) uLen
+    go u
+      = resize (atomArity t) > satSub SatBound (size vStkIn) (uSp u)
 
 needsUnfold :: Atom -> Pure CPUIn -> Bool
 needsUnfold t CPUIn{..} = go t (_top aStkIn)
@@ -611,13 +678,16 @@ needsUnfold t CPUIn{..} = go t (_top aStkIn)
 -- register contents
 inst :: Vec MaxApSpan HeapAddr -> Vec MaxAps HeapAddr -> Vec CMaxPush Atom -> Vec MaxRegs Atom ->
         Atom -> Atom
-inst _ _ spine _ (Arg shared indx)
+inst _ _ spine _ (Arg tag indx)
   = let arg = spine !! (1 + resize indx :: Index CMaxPush)
-    in dashIf shared arg
-inst prevAddrs curAddrs _ _ (Ptr shared addr)
-  | addr < snatToNum (SNat @MaxAps) = Ptr shared $ curAddrs !! addr
+    in case tag of
+         PShared -> dash arg
+         PUniq   -> arg
+         t       -> forcePtrTag t arg
+inst prevAddrs curAddrs _ _ (Ptr tag addr)
+  | addr < snatToNum (SNat @MaxAps) = Ptr tag $ curAddrs !! addr
   | otherwise -- We need to look back at recent allocations
-  = Ptr shared $ prevAddrs !! (negate addr - 1)
+  = Ptr tag $ prevAddrs !! (negate addr - 1)
 inst _ _ _ regsv (Reg shared indx)
   = dashIf shared $ regsv !! indx
 inst _ _ _ _ a = a
@@ -637,7 +707,7 @@ pushA tab = aStkPush .:= Just tab
 popA :: CPU ()
 popA = aStkPop .:= True
 
-pushU :: (Index VStkSize, HeapAddr) -> CPU ()
+pushU :: Update -> CPU ()
 pushU u = uStkPush .:= Just u
 
 popU :: CPU ()

@@ -1,54 +1,90 @@
 module Flite.Pretty where
 
-import Flite.Syntax
-import Data.List
-
-consperse :: [a] -> [[a]] -> [a]
-consperse x xs = concat (intersperse x xs)
+import           Data.List      (intercalate, nub)
+import qualified Data.Map       as Map
+import qualified Data.Set       as Set
+import           Flite.Case
+import           Flite.Fresh
+import           Flite.Identify
+import           Flite.Matching
+import           Flite.Syntax
 
 pretty :: Prog -> String
-pretty p = "{\n" ++ concatMap show p ++ "}"
+pretty p = unlines [header, showADTs p, concatMap showDecl p]
 
-instance Show Decl where
-  show (Func name args rhs) = name ++ " "
-                           ++ consperse " " (map showArg args)
-                           ++ " = "
-                           ++ show rhs ++ ";\n"
-  show (Other str) = str ++ ";\n"
+header :: String
+header = unlines []
 
-instance Show AltsTab where
-  show (AFuns   fs) = "[Funs : " ++ consperse "," fs ++ "]"
-  show (AInline as) = "[Alts : " ++ consperse ";" (map showAlt as) ++ "]"
-    where
-      showAlt (args, e) = consperse "," args ++ " -> " ++ show e
+showDecl :: Decl -> String
+showDecl (Func name args rhs) =
+  name ++ " "
+  ++ unwords (map (showArg "") args)
+  ++ "\n = "
+  ++ showExp "   " rhs ++ "\n"
 
-instance Show Exp where
-  show (App e es) = consperse " " (showArg e : map showArg es)
-  show (PrimApp p es) = "{" ++ show (App (Prim p) es) ++ "}"
-  show (Case e as) = "case " ++ show e ++ " of " ++ showBlock showAlt as
-  show (Let bs e) = "let " ++ showBlock showBind bs ++ " in " ++ show e
-  show (Var v) = v
-  show (Fun f) = f
-  show (Prim f) = f
-  show (Con c) = c
-  show (Int i) = show i
-  show (Alts as i) = show as
-  show Bottom = "_|_"
-  show (Ctr c arity i) = c
-  show (Lam vs e) = '\\' : consperse " " vs ++ " -> " ++ show e
-  show Wld = "_*"
+showExp :: String -> Exp -> String
+showExp ind (App e es) = unwords (showArg ind e : map (showArg ind) es)
+showExp ind (Case e as) = "case " ++ showExp ind e ++ " of" ++ showBlock ("  " ++ ind) showAlt as
+showExp ind (Let bs e) = "let " ++ showBlock ("    " ++ ind) showBind bs ++ " in " ++ showExp ("   " ++ ind) e
+showExp _   (Var v) = v
+showExp _   (Fun f) = f
+showExp _   (Prim f) = f
+showExp _   (Con c)
+  | c == "Cons" = "(:)"
+  | c == "Nil"  = "[]"
+  | c == "Pair"  = "(,)"
+  | otherwise = c
+showExp _   (Int i) = show i
+showExp _   Bottom = "undefined"
+showExp _   (Ctr c _ _) = c
+showExp ind (Lam vs e) = '\\' : unwords vs ++ " -> " ++ showExp ind e
+showExp _   Wld = "_"
+showExp _   e = error $ "Flite.Pretty.showExp: Don't how how to print " ++ show e
 
-showArg :: Exp -> String
-showArg (App e []) = showArg e
-showArg (App e es) = "(" ++ show (App e es) ++ ")"
-showArg (Lam vs e) = "(" ++ show (Lam vs e) ++ ")"
-showArg e = show e
+showArg :: String -> Exp -> String
+showArg ind (App e []) = showArg ind e
+showArg ind (App e es) = "(" ++ showExp ind (App e es) ++ ")"
+showArg ind (Lam vs e) = "(" ++ showExp ind (Lam vs e) ++ ")"
+showArg ind e          = showExp ind e
 
-showBlock :: (a -> String) -> [a] -> String
-showBlock f as = "{ " ++ consperse "; " (map f as) ++ " }"
+showBlock :: String -> (String -> a -> String) -> [a] -> String
+showBlock ind f as = "\n" ++ ind ++
+                     intercalate ("\n"++ind) (map (f ind) as)
 
-showAlt :: Alt -> String
-showAlt (p, e) = show p ++ " -> " ++ show e
+showAlt :: String -> Alt -> String
+showAlt ind (p, e) = showExp ind p ++ " -> " ++ showExp ("  "++ind) e
 
-showBind :: Binding -> String
-showBind (v, e) = v ++ " = " ++ show e
+showBind :: String -> Binding -> String
+showBind ind (v, e) = v ++ " = " ++ showExp ind e
+
+showDCon :: (Id, Int) -> String
+showDCon (dcon, arity) = dcon ++ " " ++ unwords args
+  where
+    args = replicate arity "_"
+
+showTyCon :: (Id, Family) -> String
+showTyCon (tycon, dcons) = "data " ++ tycon ++ " =\n" ++ unlines dconStrs
+  where
+    dconStrs = case map showDCon $ Set.toList dcons of
+                (d0:ds) -> ("    " ++ d0) : map ("  | " ++ ) ds
+                []      -> []
+
+isPrelude :: Family -> Bool
+isPrelude fam
+  | cons == ["Cons","Nil"] = True
+  | cons == ["False","True"] = True
+  | cons == ["EQ","GT","LT"] = True
+  | cons == ["Just","Nothing"] = True
+  | cons == ["Pair"] = True
+  | otherwise = False
+  where
+    cons = map fst $ Set.toList fam
+
+showADTs :: Prog -> String
+showADTs p = concatMap showTyCon adts
+  where
+    ctrs = familyTable $ families p'
+    adts = zip (map (\x->"ADT_"++show x) [0 :: Integer ..])
+               [ fam | fam <- nub $ Map.elems ctrs, not (isPrelude fam) ]
+    p' = snd (runFresh lessSugar "$" 0)
+    lessSugar = desugarCase (identifyFuncs p) >>= desugarEqn

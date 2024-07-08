@@ -37,6 +37,7 @@ main
        when ("-s" `elem` args) $
                  compileBenchmark fname
              >>= sim maxBound
+             >>= print
              >>  exitSuccess
 
        when ("--clash" `elem` args)

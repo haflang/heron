@@ -1,12 +1,13 @@
+{-# LANGUAGE TupleSections #-}
 module Flite.Strictness
   ( Strictness           -- type Strictness = [(Id, [Bool])]
   , strictnessAnalysis   -- :: Prog -> Strictness
   ) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.Dependency
+import           Flite.Dependency
+import           Flite.Descend
+import           Flite.Syntax
+import           Flite.Traversals
 
 -- Strictness of each function in each argument
 type Strictness = [(Id, [Bool])]
@@ -39,6 +40,7 @@ abstr (Fun f) = Fun f
 abstr (Int n) = mayTerminate
 abstr (Con c) = mayTerminate
 abstr (App (Con c) es) = mayTerminate
+-- TODO Do I need to handle explicit `seq` and `par` differently here?
 abstr (App (Fun f) [e0, e1])
   | isPrimId f = conj (abstr e0) (abstr e1)
 abstr (App e es) = App (abstr e) (map abstr es)
@@ -47,7 +49,7 @@ abstr (Let bs e) = Let [(v, abstr e) | (v, e) <- bs] (abstr e)
 
 abstrAlts :: [Alt] -> Exp
 abstrAlts alts = disjList (map abstr es)
-  where es = [ substMany e (zip (repeat mayTerminate) (patVars p))
+  where es = [ substMany e (map (mayTerminate,) (patVars p))
              | (p, e) <- alts ]
 
 -- Evaluate an abstract expression
@@ -65,10 +67,12 @@ eval p (App (Fun "=") [e0, e1]) =
                      ; Var v -> Var v }
 eval p (App e es) =
   case eval p e of
-    Var v -> Var v
-    Int i -> Int i
-    Fun f -> apply p f es
+    Var v            -> Var v
+    Int i            -> Int i
+    Fun f            -> apply p f es
     App (Fun f) args -> apply p f (es ++ args)
+
+-- TODO We should probably have a different expression type for abstract exprs
 
 eval' :: Strictness -> Exp -> Exp
 eval' p e = case eval p e of { App e es -> mayTerminate ; e -> e }
@@ -77,6 +81,7 @@ inv :: Exp -> Exp
 inv (Var v) = Var v
 inv (Int 1) = Int 0
 inv (Int 0) = Int 1
+inv e       = e
 
 apply :: Strictness -> Id -> [Exp] -> Exp
 apply prog f xs
@@ -110,7 +115,7 @@ unrollExp ds (Fun f) =
   case lookupFuncs f ds of
     Func f [] rhs:_ -> rhs
     Func f es rhs:_ -> mayTerminate
-    _ -> Fun f
+    _               -> Fun f
 unrollExp ds (App (Fun f) es) =
     case lookupFuncs f ds of
       Func f args rhs:_
@@ -136,11 +141,11 @@ bottomiseExp :: [Decl] -> Exp -> Exp
 bottomiseExp ds (Fun f) =
   case lookupFuncs f ds of
     Func f es rhs:_ -> bottom
-    _ -> Fun f
+    _               -> Fun f
 bottomiseExp ds (App (Fun f) es) =
     case lookupFuncs f ds of
       Func f args rhs:_ -> bottom
-      _ -> mkApp (Fun f) es'
+      _                 -> mkApp (Fun f) es'
  where es' = map (bottomiseExp ds) es
 bottomiseExp ds e = descend (bottomiseExp ds) e
 

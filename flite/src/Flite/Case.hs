@@ -1,13 +1,13 @@
 module Flite.Case (caseElim, caseElimWithCaseStack, Family, families, familyTable) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.State
-import Control.Monad
-import Data.List as List
-import Data.Set as Set
-import Data.Map as Map
+import           Control.Monad
+import           Data.List        as List
+import           Data.Map         as Map
+import           Data.Set         as Set
+import           Flite.Descend
+import           Flite.State
+import           Flite.Syntax
+import           Flite.Traversals
 
 -- Assumes that pattern matching has been desugared.
 
@@ -49,14 +49,14 @@ families p
     fam e = List.map (concatMap getCtr) (caseAlts e)
 
     getCtr (App (Con c) ps, e) = [(c, length ps)]
-    getCtr (p, e) = []
+    getCtr (p, e)              = []
 
 familyTable :: [Family] -> Map Id Family
 familyTable fams =
   Map.fromList [(id, fam) | fam <- fams, (id, arity) <- Set.toList fam]
 
 expandCase :: Map Id Family -> Prog -> Prog
-expandCase table p = onExp expand p
+expandCase table = onExp expand
   where
     expand (Case e ((Var v, rhs):as)) = expand (Let [(v, e)] rhs)
     expand (Case e alts@((App (Con c) ps, rhs):as)) = Case (expand e) alts'
@@ -68,7 +68,7 @@ expandCase table p = onExp expand p
     expand e = descend expand e
 
 elim :: Bool -> [Family] -> Prog -> Prog
-elim cstk fams p = concatMap comp p
+elim cstk fams = concatMap comp
   where
     ctrInfo = [ (f, (arity, i))
               | fs <- List.map Set.toAscList fams
@@ -80,7 +80,7 @@ elim cstk fams p = concatMap comp p
 
     compFun fun (Con c)
       | Prelude.null cinfo = return Bottom
-      | otherwise = return (Ctr c (fst $ head cinfo) (snd $ head cinfo))
+      | otherwise = return (uncurry (Ctr c) (head cinfo))
       where cinfo = [ci | (d, ci) <- ctrInfo, c == d]
     compFun fun (Case e as) =
       return App `ap` compFun fun e `ap` calts fun as
@@ -88,7 +88,7 @@ elim cstk fams p = concatMap comp p
 
     calts fun as =
       do es' <- mapM (compFun fun) es
-         let fvs = nub $ concat $ zipWith (freeVarsExcept) vss es'
+         let fvs = nub $ concat $ zipWith freeVarsExcept vss es'
          fs <- zipWithM (calt fun fvs) vss es'
          let alts = Alts (AFuns fs) (length fvs)
          return ([alts] ++ [Int 0 | cstk && List.null fvs] ++ List.map Var fvs)

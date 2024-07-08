@@ -13,7 +13,7 @@ module Heron.Core.Heap
   , HeapIn
   , HeapOut (..)
   -- * Helpers
-  , arbitrateGC
+  , arbitrateHeap
   ) where
 
 import           Clash.Prelude
@@ -94,25 +94,28 @@ getWriteAddr :: KnownNat n => RamOp n a -> Maybe (Index n)
 getWriteAddr (RamWrite addr _) = Just addr
 getWriteAddr _                 = Nothing
 
--- | Arbitrates heap access between mutator and collector. The collector
--- operation is always scheduled on the first heap port, and priority is always
--- given to the mutator.
-arbitrateGC
+-- | Arbitrates heap access between mutator, scheduler, and collector. The collector and scheduler
+-- operations are always scheduled on the first heap port, and priority is always
+-- given to the mutator (followed by the scheduler).
+arbitrateHeap
   :: forall d a p .
      ( KnownNat p
      , KnownNat d
      , NFDataX  a
+     , Show     a
      )
-  => HeapIn a (p+1) d
+  => HeapIn a (p+2) d
   -> RamOp d a
-  -> (HeapIn a (p+1) d, Bool)
-arbitrateGC ops RamNoOp = (ops, False)
-arbitrateGC ops gc
-  | not (isNoOp $ head ops) = (ops, False) -- error "GC and Core conflict on port A" --DEBUG
-  -- | any (collides gc) ops   = error "GC READ and Core WRITE conflict" --DEBUG
-  | otherwise = (gc :> tail ops, True)
+  -> (HeapIn a (p+2) d, Bool)
+arbitrateHeap ops gc
+  | mutIdle && isOp gc  = (checkCollision $ gc  :> tail ops, True)
+  | otherwise = (checkCollision ops, False)
   where
+    mutIdle = isNoOp $ head ops
+    isOp = not . isNoOp
     isNoOp RamNoOp = True
     isNoOp _       = False
-    -- collides (RamRead x) (RamWrite y _) = x==y
-    -- collides _ _ = False
+    checkCollision :: HeapIn a (p+2) d -> HeapIn a (p+2) d
+    checkCollision as@((RamWrite x _) :> (RamWrite y _) :> zs)
+      | x==y = errorX $ unwords ["Possible WW heap collision on ", show as] -- RF BRAM only has W-W collisions
+    checkCollision as = as

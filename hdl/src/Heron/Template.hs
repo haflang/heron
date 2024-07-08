@@ -33,11 +33,11 @@ module Heron.Template
   , Template(..)
   -- ** Applications
   , Node(..)
-  , AtomNode
   , SpineNode
   , HeapNode
   -- ** Atoms
   , Atom(..)
+  , PtrTag(..)
   -- ** Case handling
   , Alt(..)
   , CaseTable(..)
@@ -59,18 +59,25 @@ module Heron.Template
   , isInt
   , isCon
   , isShared
+  , isTagShared
+  , isWHNF
   , heapAddr
+  , setHeapAddr
   , atomArity
   , appLen
   , rawAdd
   , canGC
   , altPushOffset
+  , getAtom
 
   -- ** Mutations
   , mapNode
+  , setAtoms
+  , replaceAtom
   , mapTemplate
   , dash
   , dashIf
+  , forcePtrTag
 
   -- * Pretty printing
   , ppNode
@@ -116,14 +123,14 @@ type RegIndex   = Index    MaxRegs
 -- | Primary stack push offset (net effect on size after pops and pushes)
 type PushOffset = Signed   (1 + Log2MaxPush)
 -- | Are arguments to primitive application swapped?
-type IsSwapped   = Bool
+type IsSwapped  = Bool
 -- | Is this node possibly shared (and will need updating with its normal
 -- form)?
-type IsShared    = Bool
+type IsShared   = Bool
 -- | Is this node already in its normal form? TODO Is storing this any better than
-type IsNF        = Bool
+type IsNF       = Bool
 -- | Is this template the first in a series of split templates?
-type IsFirst     = Bool
+type IsFirst    = Bool
 
 -- | Encodes natural numbers from 0 to n, inclusive.
 type Len n = Index (1+n)
@@ -135,10 +142,18 @@ data OpCode
   | OpEq
   | OpNeq
   | OpLeq
-  | OpSeq
+  | OpUnwrap
   deriving (Eq, Show, Generic, NFDataX, ShowX, Lift, Enum, Bounded)
 deriveAnnotation (simpleDerivator OneHot OverlapL) [t| OpCode |]
 deriveBitPack [t| OpCode |]
+
+-- | Pointer tags
+data PtrTag
+  = PUniq
+  | PShared
+  | PSeq
+  | PPar
+  deriving (Eq, Show, Generic, NFDataX, ShowX, Lift, BitPack)
 
 -- | Single atom
 data Atom
@@ -146,19 +161,23 @@ data Atom
   -- ^ Template pointer
   | PrimOp    FnArity  IsSwapped OpCode
   -- ^ Primitive operation
-  | Ptr       IsShared HeapAddr
+  | Ptr       PtrTag HeapAddr
   -- ^ Heap node pointer
   | PrimInt   PInt
   -- ^ Primitive integer literal
   | Con       FnArity  Tag
   -- ^ Constructor tag
-  | Arg       IsShared ArgIndex
+  | Arg       PtrTag ArgIndex
   -- ^ Argument pointer
   | Reg       IsShared RegIndex
   -- ^ Primitive register pointer
   deriving (Eq, Show, Generic, NFDataX, ShowX, Lift, BitPack)
 -- TODO Try making the atom bit pack use one-hot _only_ on stack. Might speed up
 -- our control logic?
+-- deriveAnnotation defaultDerivator [t| Atom |]
+-- deriveBitPack [t| Atom |]
+-- TODO The packedDerivator would be more space efficient but it seems broken.
+-- Using that we get Fun 0 0 False /= unpack . pack $ Fun 0 0 False...
 
 instance Default Atom where
   def = PrimInt 0
@@ -230,8 +249,6 @@ data Node nApp nCase
   -- ^ Primitive operation application (for PRS scheme)
   deriving (Eq, Show, Generic, NFDataX, ShowX, Lift, BitPack)
 
--- | Node specialised for single atoms
-type AtomNode  = Node 1       1
 -- | Node specialised for spinal applications
 type SpineNode = Node MaxPush MaxPush
 -- | Node specialised for heap applications. N.B. `Case` applications have one
@@ -272,6 +289,31 @@ mapNode f (App isNF arity as)
   = App isNF arity (map (fmap f) as)
 mapNode f (Prim reg arity as)
   = Prim reg arity (map (fmap f) as)
+
+-- | Set the `Atom`s in a `Node`. For `Case` and `Prim` `Node`s, the `Atom`
+-- vector will be truncated.
+setAtoms :: HeapNode -> Vec NodeLen (Maybe Atom) -> HeapNode
+setAtoms (Case alt arity _) as
+  = Case alt arity $ takeI as
+setAtoms (App isNF arity _) as
+  = App isNF arity as
+setAtoms (Prim reg arity _) as
+  = Prim reg arity (takeI $ as)
+
+getAtom :: (KnownNat n, KnownNat m) =>
+           Index (Max n m) -> Node n m -> Maybe Atom
+getAtom i (Case _ _ as) = as !! i
+getAtom i (App  _ _ as) = as !! i
+getAtom i (Prim _ _ as) = as !! i
+
+replaceAtom :: (KnownNat n, KnownNat m) =>
+               Maybe Atom -> Index (Max n m) -> Node n m -> Node n m
+replaceAtom x i (Case alt arity as)
+  = Case alt arity (replace i x as)
+replaceAtom x i (App isNF arity as)
+  = App isNF arity (replace i x as)
+replaceAtom x i (Prim reg arity as)
+  = Prim reg arity (replace i x as)
 
 -- | Map a function over `Atom`s in a `Template`.
 mapTemplate :: (Atom -> Atom) -> Template -> Template
@@ -320,12 +362,19 @@ fromBool False = falseAtom
 appLen :: Vec NodeLen (Maybe Atom) -> Len NodeLen
 appLen = fold (+) . map (maybe 0 (const 1))
 
--- | Get the arity implied by an `Atom`
+-- | Checks if a given node is in WHNF
+isWHNF :: Node nApp nCase -> Bool
+isWHNF (App isNF _ _) = isNF
+isWHNF _              = False
+
+-- | Get the arity implied by an `Atom` in normal form. Normal forms can be
+--   constructor applications, primitive integers, or partially applied
+--   functions. The partially applied functions are handled by underreporting
+--   the true arity by one.
 atomArity :: Atom -> FnArity
-atomArity (Fun arity _ _)    = arity
-atomArity (PrimOp arity _ _) = arity
 atomArity (PrimInt   _)      = 1
 atomArity (Con arity _)      = 1+arity
+atomArity (Fun arity _ _)    = arity
 atomArity _                  = 0
 
 -- | Is this `Atom` a `PrimInt`?
@@ -338,20 +387,30 @@ isCon :: Atom -> Bool
 isCon (Con _ _) = True
 isCon _         = False
 
+-- | Is this `PtrTag` something possibly-shared?
+isTagShared :: PtrTag -> Bool
+isTagShared PUniq = False
+isTagShared _     = True
+
 -- | Does this `Atom` point to something possibly-shared?
 isShared :: Atom -> Bool
-isShared (Fun {})      = False
-isShared (PrimOp {})   = False
-isShared (Ptr sh _)    = sh
-isShared (PrimInt   _) = False
-isShared (Con {})      = False
-isShared (Arg s _)     = s
-isShared (Reg s _)     = s
+isShared (Fun {})     = False
+isShared (PrimOp {})  = False
+isShared (Ptr t   _)  = isTagShared t
+isShared (PrimInt _)  = False
+isShared (Con {})     = False
+isShared (Arg t _)    = isTagShared t
+isShared (Reg s _)    = s
 
 -- | Maybe return a `HeapAddr` pointed to by this `Atom`
 heapAddr :: Atom -> Maybe HeapAddr
-heapAddr (Ptr _    a) = Just a
-heapAddr _            = Nothing
+heapAddr (Ptr _ a) = Just a
+heapAddr _         = Nothing
+
+-- | Sets the heap address of any `Ptr` while maintaining its flags
+setHeapAddr :: HeapAddr -> Atom -> Atom
+setHeapAddr addr (Ptr mode _) = Ptr mode addr
+setHeapAddr _ a = a
 
 -- | Addition for `Index` using raw bits. Our relative `Ptr` addresses might be
 -- negative and the raw interpretation is needed to avoid `Index` bound checks.
@@ -367,8 +426,8 @@ canGC _               = True
 
 -- | Mark this `Atom` as possibly-shared
 dash :: Atom -> Atom
-dash (Ptr _ addr)  = Ptr True addr
-dash (Arg _ index) = Arg True index
+dash (Ptr PUniq addr) = Ptr PShared addr
+dash (Arg PUniq index) = Arg PShared index
 dash (Reg _ index) = Reg True index
 dash a             = a
 
@@ -376,6 +435,13 @@ dash a             = a
 dashIf :: Bool -> Atom -> Atom
 dashIf True  = dash
 dashIf False = id
+
+forcePtrTag :: PtrTag -> Atom -> Atom
+forcePtrTag PSeq (Ptr _ addr) = Ptr PSeq addr
+forcePtrTag PPar (Ptr _ addr) = Ptr PPar addr
+forcePtrTag _ a = Fun 1 1 True -- Resolves to the `id` function. Used as a hack
+                               -- for ignoring seq/pars on arguments who turn
+                               -- out to not be heap references.
 
 --------------------------------------------------------------------------------
 -- Template Pretty Printing

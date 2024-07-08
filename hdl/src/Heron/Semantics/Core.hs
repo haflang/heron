@@ -91,8 +91,8 @@ type Debugger = Integer -> State -> IO ()
 -- Helpers
 
 dash :: Shared -> Atom -> Atom
-dash True (VAR _ n) = VAR True n
-dash True (ARG _ n) = ARG True n
+dash True (VAR _ s p n) = VAR True s p n
+dash True (ARG _ s p n) = ARG True s p n
 dash True (REG _ n) = REG True n
 dash _ a            = a
 
@@ -147,11 +147,11 @@ instAtom ::
   -- | Atom to instantiate
   Atom ->
   Atom
-instAtom _ _ stk _ _ (ARG sh n) = dash sh (stk !! n)
+instAtom _ _ stk _ _ (ARG sh s p n) = dash sh (stk !! n)
 instAtom _ _ _ _ regs (REG sh n) = dash sh (regs !! n)
-instAtom aOld aNext _ _ _ (VAR sh n)
-  | n >= 0 = VAR sh (aNext !! n)
-  | otherwise = VAR sh (aOld !! negate (n + 1))
+instAtom aOld aNext _ _ _ (VAR sh s p n)
+  | n >= 0 = VAR sh s p (aNext !! n)
+  | otherwise = VAR sh s p (aOld !! negate (n + 1))
 instAtom _ _ _ _ _ a = a
 
 instAtoms ::
@@ -196,7 +196,7 @@ instApp ao an stk heap (us, regs) (PRIM n es) =
         [INT n0, INT n1, PRI _ op] ->
           (us, write regs n (alu op n0 n1))
         _ ->
-          (us ++ [APP False es'], write regs n (VAR False (an !! length us)))
+          (us ++ [APP False es'], write regs n (VAR False False False (an !! length us)))
 
 newChain :: Atom -> Atom
 newChain (FUN _ a n) = FUN True a n
@@ -209,14 +209,14 @@ newChain a           = a
 -- prefetching from heap.
 step :: State -> State
 -- Unwind
-step (VAR s n : stk, p, h, ustk, cstk, regs, frz, pstk, ao, an) =
+step (VAR s _ _ n : stk, p, h, ustk, cstk, regs, frz, pstk, ao, an) = -- TODO Implement SEQ
   (dashs s es ++ stk, p, h, us ++ ustk, cs ++ cstk, regs, frz, pstk, ao, an)
   where
     (isNF, cs, es) = splitApp (h !! n)
     us = [(length stk, n) | s && not isNF]
 
 -- Update
-step (e : stk, p, h, (sp, n) : ustk, cstk, regs, frz, pstk, ao, an)
+step (e : stk, p, h, (sp, n) : ustk, cstk, regs, frz, pstk, ao, an) -- TODO Implement SEQ
   | arity e > length stk - sp =
       (es1' ++ es2, p, h', ustk, cstk, regs, frz, pstk, ao, an)
   where
@@ -225,7 +225,7 @@ step (e : stk, p, h, (sp, n) : ustk, cstk, regs, frz, pstk, ao, an)
     h' = write h n (APP True es1)
 
 -- Primitives
-step (INT n : PRI _ "(!)" : e : stk, p, h, ustk, cstk, regs, frz, pstk, ao, an) =
+step (INT n : PRI _ "unwrap" : e : stk, p, h, ustk, cstk, regs, frz, pstk, ao, an) =
   (e : INT n : stk, p, h, ustk, cstk, regs, frz, pstk, ao, an)
 step (INT n0 : INT n1 : PRI 2 op : stk, p, h, ustk, cstk, regs, frz, pstk, ao, an) =
   (alu op n0 n1 : stk, p, h, ustk, cstk, regs, frz, pstk, ao, an)
@@ -277,7 +277,7 @@ run debug prog = do
   eval 0 initialState
   where
     initialState = ([FUN True 0 0], prog, replicate 32768 (APP False []), [], [], replicate maxRegs (INT 0), [], [], [], [0 .. 32678])
-    eval n s@([INT i], _, _, _, _, _, _, _, _, _) = debug n s >> pure (n, i)
+    eval n s@([INT i], _, _, _, _, _, _, _, _, _) = debug n s >> pure (n+1, i)
     eval n s =
       debug n s
         >> eval (n + 1) (step s)
@@ -447,7 +447,7 @@ graphState (vs, _, hs, us, as, rs, _, ps, _, _) =
     findEdges (n, GReg _ x)  = atomEdges n x
     findEdges _              = []
 
-    atomEdges n (VAR _ addr) = [(n, nodeIndx $ GHeap addr (hs !! addr), "")]
+    atomEdges n (VAR _ _ _ addr) = [(n, nodeIndx $ GHeap addr (hs !! addr), "")]
     atomEdges n (REG _ addr) = [(n, nodeIndx $ GReg addr (rs !! addr), "")]
     atomEdges _ _            = []
 

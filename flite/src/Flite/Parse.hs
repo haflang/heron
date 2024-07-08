@@ -1,12 +1,14 @@
 module Flite.Parse where
+
 import Flite.Syntax
 import Flite.Prelude
 import Flite.Pretty
 import Flite.Traversals
+import Data.Functor ((<$),(<&>))
 
 -- import Control.Applicative
-import Control.Arrow hiding (app)
-import Control.Monad
+import           Control.Arrow                       hiding (app)
+import           Control.Monad
 -- import Control.Monad.State
 import Data.Char hiding (chr)
 import Data.List
@@ -90,27 +92,31 @@ tryFor s m = try m <?> s
 
 binApp t x y = App t [x, y]
 consOrVar n = if isLower (head n) then Var n else Con n
-infixName = Infix (try (symbol "`" *> identifier <* symbol "`") >>= return . binApp . consOrVar ) AssocLeft
+infixName = Infix (try (symbol "`" *> identifier <* symbol "`") <&> (binApp . consOrVar) ) AssocLeft
+infixSeq = Infix (try (symbol "`" *> symbol "seq" <* symbol "`") <&> (binApp . consOrVar) ) AssocRight
+infixPar = Infix (try (symbol "`" *> symbol "par" <* symbol "`") <&> (binApp . consOrVar) ) AssocRight
 
-binaryOp op assoc = Infix (reservedOp op >> return (binApp (Fun $ "(" ++ op ++ ")"))) assoc
+binaryOp op = Infix (reservedOp op >> return (binApp (Fun $ "(" ++ op ++ ")")))
 listCons = Infix (symbol ":" >> return (binApp (Con "Cons"))) AssocRight
 dollarOp = Infix (symbol "$" >> return (\x y -> App x [y]))   AssocRight
 
-opTable = [ [infixName              , binaryOp "."  AssocRight                                                ]
-          , [binaryOp "+" AssocLeft , binaryOp "-"  AssocLeft  , binaryOp "!!"  AssocLeft                      ]
-          , [binaryOp "&&" AssocRight, binaryOp "||" AssocRight                                               ]
-          , [binaryOp "==" AssocNone, binaryOp "/=" AssocNone, binaryOp "<=" AssocNone, binaryOp ">" AssocNone]
-          , [listCons               , binaryOp "++" AssocRight , dollarOp                                     ]
-          , [binaryOp "|" AssocLeft -- This is only used to discard type definitions
-            ]
+opTable = [ [binaryOp "."  AssocRight                                                                           ]
+          , [binaryOp "+"  AssocLeft , binaryOp "-"  AssocLeft , binaryOp "!!"  AssocLeft                       ]
+          , [binaryOp "&&" AssocRight, binaryOp "||" AssocRight                                                 ]
+          , [binaryOp "==" AssocNone , binaryOp "/=" AssocNone , binaryOp "<=" AssocNone, binaryOp ">" AssocNone]
+          , [listCons                , binaryOp "++" AssocRight                                                 ]
+          , [infixSeq, infixPar, infixName                                                                      ]
+          , [dollarOp                                                                                           ]
+          , [binaryOp "|"  AssocLeft                                                                            ]
+            -- ^ This is only used to discard type definitions
           ]
 
 -- | Constructor names
 conId :: Parser Id
 conId = tryFor "constructor" $
-            try (pure "Nil"   <* symbol "[]"  )
-        <|> try (pure "Pair"  <* symbol "(,)" )
-        <|> try (pure "Cons"  <* symbol "(:)" )
+            try ("Nil"  <$ symbol "[]"  )
+        <|> try ("Pair" <$ symbol "(,)" )
+        <|> try ("Cons" <$ symbol "(:)" )
         <|> (do c <- identifier
                 if isUpper (head c)
                     then return c
@@ -154,8 +160,7 @@ defn = withPos (do
   args <- many pat
   reservedOp "="
   sameOrIndented
-  body <- expr
-  pure $ Func f args body
+  Func f args <$> expr
   ) <?> "definition"
 
 pat :: Parser Exp
@@ -168,7 +173,8 @@ pat =   try con
     <?> "pattern"
 
 app :: [Exp] -> Exp
-app [f] = f
+app []       = error "Flite.Parse.app: Got an empty list of expressions"
+app [f]      = f
 app (f:args) = App f args
 
 expr :: Parser Exp
@@ -213,10 +219,9 @@ let_ = do
   reserved "let"
   bs <- block bind
   reserved "in"
-  scope <- expr
-  return $ Let bs scope
+  Let bs <$> expr
   where
-    bind = pure (,) <*> varId <*> (reservedOp "=" *> expr)
+    bind = ((,) <$> varId) <*> (reservedOp "=" *> expr)
 
 list = tryFor "list" $ do
   xs <- brackets (expr `sepBy1` comma)
@@ -244,26 +249,20 @@ ifThenElse = tryFor "ifThenElse" $ do
   pure $ Case scr [(Con "True", t), (Con "False", f)]
 
 int :: Parser Exp
-int = pure Int <*> (pure fromInteger <*> natural)
+int = Int . fromInteger <$> natural
 
 chr :: Parser Exp
-chr = pure (Int . ord) <*> charLiteral
+chr = Int . ord <$> charLiteral
 
 wild :: Parser Exp
-wild = pure Wld <* reserved "_"
+wild = Wld <$ reserved "_"
 
 str :: Parser Exp
-str = pure stringExp <*> stringLiteral
+str = stringExp <$> stringLiteral
   where
   stringExp []     = App (Con "Nil" ) []
   stringExp (x:xs) = App (Con "Cons") [Int . ord $ x, stringExp xs]
 
-{-
-Tuples:
-tms <- parens (term `sepBy1` comma)
-        return $ foldl (\x y -> Pair x y) (head tms) (tail tms)
-Something similar for lists
--}
 testParser :: Parser a -> String -> Either ParseError a
 testParser p = runIndent . runParserT p () "test"
 
