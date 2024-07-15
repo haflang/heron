@@ -623,7 +623,6 @@ updateNexts gcMemIn =
 -- | Is there an immediate deallocation request that should be handled on this cycle?
 deallocSafe :: Phase -> HeapAddr -> Bool
 deallocSafe Mark _             = False
-deallocSafe (Sweep (Just x)) y = y > x
 deallocSafe _ _                = True
 
 -- | Update bookkeeping to reflect new allocations
