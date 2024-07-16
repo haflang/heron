@@ -1,71 +1,35 @@
-id x = x
+data Kind
+  = Bishop
+  | King
+  | Knight
+  | Pawn
+  | Queen
+  | Rook
 
-const c x = c
+data Colour
+  = Black
+  | White
 
-inc n = n + 1
+type Square = (Int, Int)
 
-dec n = n - 1
+type Piece = (Colour, Kind)
 
-min x y = if x <= y then x else y
+data Board
+  = Board [(Kind, Square)] [(Kind, Square)]
 
-max x y = if x <= y then y else x
+data Move
+  = Move Square (Maybe Piece) (Maybe Piece)
 
-abs n = if 0 <= n then n else 0 - n
+data MoveInFull = MoveInFull Piece Square Move
+
+data Solution
+  = Solution MoveInFull [(MoveInFull, Solution)]
 
 plus a b = a + b
 
 minus a b = a - b
 
-no Nothing = True
-no (Just x) = False
-
-maybe n j Nothing  = n
-maybe n j (Just x) = j x
-
-con True  q = q
-con False q = False
-
-dis True  q = True
-dis False q = q
-
-fst (x, y) = x
-
-snd (x, y) = y
-
 cross (f, g) (x, y) = (f x, g y)
-
-null []       = True
-null (x : xs) = False
-
-append []       ys = ys
-append (x : xs) ys = x : append xs ys
-
-elemAt (x : xs) n =
-  if n == 0
-    then x
-    else elemAt xs (n - 1)
-
-map f [] = []
-map f (x : xs) = f x : map f xs
-
-concatMap f [] = []
-concatMap f (x : xs) = append (f x) (concatMap f xs)
-
-any p []       = False
-any p (x : xs) = dis (p x) (any p xs)
-
-foldr f z []       = z
-foldr f z (x : xs) = f x (foldr f z xs)
-
-sumAcc acc [] = acc
-sumAcc acc (x : xs) = sumAcc (acc + x) xs
-
-sum xs = sumAcc 0 xs
-
-unzip []             = ([],[])
-unzip ((x, y) : xys) =
-  let  u = unzip xys
-  in  (x : (fst u), y : (snd u))
 
 kindToChar k =
   case k of
@@ -130,11 +94,11 @@ sameColour Black Black = True
 rank (f, r) = r
 file (f, r) = f
 
-sameSquare (f1, r1) (f2, r2) = con (f1 == f2) (r1 == r2)
+sameSquare (f1, r1) (f2, r2) = (f1 == f2) && (r1 == r2)
 
 onboard (p, q) =
-  con (con (1 <= p) (p <= 8))
-      (con (1 <= q) (q <= 8))
+  ((1 <= p) && (p <= 8)) &&
+  ((1 <= q) && (q <= 8))
 
 forcesColoured White (Board wkss bkss) = wkss
 forcesColoured Black (Board wkss bkss) = bkss
@@ -169,22 +133,22 @@ rawmoves c (k, sq) bd =
   in m c sq bd
 
 bishopmoves c sq bd =
-  append (moveLine bd c sq (cross (dec, inc))) $
-  append (moveLine bd c sq (cross (inc, inc))) $
-  append (moveLine bd c sq (cross (dec, dec)))
-         (moveLine bd c sq (cross (inc, dec)))
+  moveLine bd c sq (cross (pred, succ)) ++
+  moveLine bd c sq (cross (succ, succ)) ++
+  moveLine bd c sq (cross (pred, pred)) ++
+  moveLine bd c sq (cross (succ, pred))
 
 rookmoves c sq bd =
-  append (moveLine bd c sq (cross (dec, id))) $
-  append (moveLine bd c sq (cross (inc, id))) $
-  append (moveLine bd c sq (cross (id, dec)))
-         (moveLine bd c sq (cross (id, inc)))
+  moveLine bd c sq (cross (pred, id)) ++
+  moveLine bd c sq (cross (succ, id)) ++
+  moveLine bd c sq (cross (id, pred)) ++
+  moveLine bd c sq (cross (id, succ))
 
-moveLine bd c sq inc =
-  let incsq = inc sq
+moveLine bd c sq i =
+  let incsq = i sq
   in if onboard incsq
        then case pieceAt bd incsq of
-              Nothing -> Move incsq Nothing Nothing : moveLine bd c incsq inc
+              Nothing -> Move incsq Nothing Nothing : moveLine bd c incsq i
               Just p  -> if sameColour (colourOf p) c
                            then []
                            else [Move incsq (Just p) Nothing]
@@ -232,16 +196,16 @@ pawnmoves c (p, q) bd =
               Black -> 0 - 1
       on1  = (p, q + fwd)
       on2  = (p, q + fwd + fwd)
-      mov2 = if con (secondRank c q) (no (pieceAt bd on2))
+      mov2 = if (secondRank c q) && isNothing (pieceAt bd on2)
                then [Move on2 Nothing Nothing]
                else []
-      movs = if no (pieceAt bd on1)
-               then append (promote c on1 Nothing) mov2
+      movs = if isNothing (pieceAt bd on1)
+               then promote c on1 Nothing ++ mov2
                else []
       dii  = (p + 1, q + fwd)
       did  = (p - 1, q + fwd)
-      caps = append (promoteCap c dii bd) (promoteCap c did bd)
-  in append movs caps
+      caps = promoteCap c dii bd ++ promoteCap c did bd
+  in movs ++ caps
 
 promoteCap c sq bd =
   let mcp = pieceAt bd sq
@@ -267,7 +231,7 @@ secondRank Black r = r == 7
 lastRank White r = r == 8
 lastRank Black r = r == 1
 
-queenmoves c sq bd = append (bishopmoves c sq bd) (rookmoves c sq bd)
+queenmoves c sq bd = bishopmoves c sq bd ++ rookmoves c sq bd
 
 kingincheck c bd =
   any (kingInCheckFrom c bd) (forcesColoured (opponent c) bd)
@@ -276,43 +240,46 @@ kingInCheckFrom c bd (f, (x, y)) =
   case kingSquare c bd of
     (xk, yk) ->
       case f of
-        King   -> con (abs (x - xk) <= 1)
-                      (abs (y - yk) <= 1)
-        Queen  -> dis (kingInCheckFrom c bd (Rook  , (x, y)))
-                      (kingInCheckFrom c bd (Bishop, (x, y)))
-        Rook   -> dis (con (x == xk)
-                           (emptyAtAll bd (filePath xk y yk)))
-                      (con (y == yk)
-                           (emptyAtAll bd (rankPath yk x xk)))
-        Bishop -> dis (con (x - y == xk - yk)
-                           (emptyAtAll bd (diagPath minus (xk - yk) x xk)))
-                      (con (x + y == xk + yk)
-                           (emptyAtAll bd (diagPath plus  (xk + yk) x xk)))
-        Knight -> dis (con (abs (x - xk) == 2) (abs (y - yk) == 1))
-                      (con (abs (x - xk) == 1) (abs (y - yk) == 2))
-        Pawn   -> con (abs (x - xk) == 1)
-                      (yk == onFor c y  )
+        King   -> (abs (x - xk) <= 1) &&
+                  (abs (y - yk) <= 1)
+        Queen  -> (kingInCheckFrom c bd (Rook  , (x, y))) ||
+                  (kingInCheckFrom c bd (Bishop, (x, y)))
+        Rook   -> ((x == xk) &&
+                   (emptyAtAll bd (filePath xk y yk))) ||
+                  ((y == yk) &&
+                   (emptyAtAll bd (rankPath yk x xk)))
+        Bishop -> ((x - y == xk - yk) &&
+                   (emptyAtAll bd (diagPath minus (xk - yk) x xk))) ||
+                  ((x + y == xk + yk) &&
+                   (emptyAtAll bd (diagPath plus  (xk + yk) x xk)))
+        Knight -> ((abs (x - xk) == 2) && (abs (y - yk) == 1)) ||
+                  ((abs (x - xk) == 1) && (abs (y - yk) == 2))
+        Pawn   -> (abs (x - xk) == 1) &&
+                  (yk == onFor c y  )
 
-onFor Black = inc
-onFor White = dec
+onFor Black = succ
+onFor White = pred
 
 filePath xk yFrom yTo (x, y) =
   let ylo = min yFrom yTo + 1
       yhi = max yFrom yTo - 1
-  in con (x == xk)
-         (con (ylo <= y) (y <= yhi))
+  in (x == xk) &&
+     (ylo <= y) &&
+     (y <= yhi)
 
 rankPath yk xFrom xTo (x, y) =
   let xlo = min xFrom xTo + 1
       xhi = max xFrom xTo - 1
-  in  con (y == yk)
-          (con (xlo <= x) (x <= xhi))
+  in  (y == yk)  &&
+      (xlo <= x) &&
+      (x <= xhi)
 
 diagPath op d xFrom xTo (x, y) =
   let xlo = min xFrom xTo + 1
       xhi = max xFrom xTo - 1
-  in  con (op x y == d)
-          (con (xlo <= x) (x <= xhi))
+  in  (op x y == d) &&
+      (xlo <= x)    &&
+      (x <= xhi)
 
 solve bd c n = showResult (solution bd c (n + n - 1))
 
@@ -381,7 +348,7 @@ main =
   let
    problem =
     (Board player1 player2
-    ,Pair White 3)
+    ,(White, 3))
   in solveProblem problem
 
 solveProblem (bd, (c, n)) = solve bd c n

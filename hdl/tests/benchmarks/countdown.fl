@@ -1,3 +1,11 @@
+data Op =
+    Add
+  | Div
+  | Mul
+  | Sub
+  | Val a
+  | App (Op a) (Op a) (Op a)
+
 valid Add x y  =  True
 valid Sub x y  =  not (x <= y)
 valid Mul x y  =  True
@@ -10,7 +18,7 @@ apply Div x y  =  div x y
 
 subs []       = [[]]
 subs (x : xs) = let yss = subs xs
-    in append yss (map ((:) x) yss)
+    in yss ++ map ((:) x) yss
 
 interleave x []       =  [[x]]
 interleave x (y : ys) =
@@ -36,7 +44,7 @@ results (n : ns) =
 combinedResults (ls, rs)  = concatProdWith combine (results ls) (results rs)
 
 concatProdWith f []       ys = []
-concatProdWith f (x : xs) ys = append (concatMap (f x) ys) (concatProdWith f xs ys)
+concatProdWith f (x : xs) ys = concatMap (f x) ys ++ concatProdWith f xs ys
 
 combine (l, x) (r, y) =
   let ops = [Add, Sub, Mul, Div]
@@ -52,30 +60,11 @@ solutions ns n = concatMap (solns n) (choices ns)
 solns n ns = let ems = results ns
              in preImage n (results ns)
 
-preImage n []                   = []
-preImage n (Cons (Pair e m) ems) =
+preImage n []             = []
+preImage n ((e, m) : ems) =
   if m == n
     then e : preImage n ems
     else preImage n ems
-
-not True   =  False
-not False  =  True
-
-div x y = case divMod x y of (d, m) -> d
-
-mod x y = case divMod x y of (d, m) -> m
-
-divMod x y = let  y2 = y + y in
-             if y2 <= x
-               then case divMod x y2 of
-                      (d2, m2) ->
-                        let d2x2 = d2 + d2
-                        in if y <= m2
-                             then (d2x2 + 1, m2 - y)
-                             else (d2x2, m2)
-               else if y <= x
-                      then (1, x - y)
-                      else (0, x    )
 
 mul x n =
   if n == 1
@@ -84,25 +73,6 @@ mul x n =
            (d, m) -> mul (x + x) d + (if m == 0 then 0 else x)
 
 cross (f, g) (x, y) = (f x, g y)
-
-id x = x
-
-null []       = True
-null (x : xs) = False
-
-length xs = lengthAcc 0 xs
-
-lengthAcc acc [] = acc
-lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
-
-append []       ys = ys
-append (x : xs) ys = x : append xs ys
-
-map f []       = []
-map f (x : xs) = f x : map f xs
-
-concatMap f []       = []
-concatMap f (x : xs) = append (f x) (concatMap f xs)
 
 main =
   let givens = [3,4,10]

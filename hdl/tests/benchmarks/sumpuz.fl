@@ -1,21 +1,6 @@
-fst (x, y) = x
-
-snd (x, y) = y
-
 rng = map snd
 
 img lds l = fromJust (lookup l lds)
-
-fromJust (Just x) = x
-
-lookup a [] = Nothing
-lookup a ((b, c) : rest) =
-  if a == b
-    then Just c
-    else lookup a rest
-
-sum [] = 0
-sum (x : xs) = x + sum xs
 
 del x [] = []
 del x (y : ys) =
@@ -23,44 +8,20 @@ del x (y : ys) =
     then ys
     else y : del x ys
 
-member x [] = False
-member x (y : ys) =
-  if x == y
-    then True
-    else member x ys
-
-flip f x y = f y x
-
 diff = foldl (flip del)
 
-foldl f a [] = a
-foldl f a (x : xs) = foldl f (f a x) xs
-
-repeat x = x : repeat x
-
-zip [] ys = []
-zip (x : xs) [] = []
-zip (x : xs) (y : ys) = (x, y) : zip xs ys
-
-map f [] = []
-map f (x : xs) = f x : map f xs
+con x xs = x : xs
 
 bindings l ds lds =
   case lookup l lds of
-    Nothing -> map (flip Cons lds) (zip (repeat l) (diff ds (rng lds)))
-    Just d -> if member d ds then [lds] else []
-
-append [] ys = ys
-append (x : xs) ys = x : append xs ys
+    Nothing -> map (flip con lds) (zip (repeat l) (diff ds (rng lds)))
+    Just d -> if elem d ds then [lds] else []
 
 ofAll f [] = []
-ofAll f (x : xs) = append (f x) (ofAll f xs)
+ofAll f (x : xs) = (f x) ++ (ofAll f xs)
 
 ifNull [] t e = t
 ifNull (x : xs) t e = e
-
-head (x : xs) = x
-tail (x : xs) = xs
 
 solutions [] yys [] clds =
   if fst clds == 0
@@ -74,10 +35,8 @@ solutions [] yys [z] clds =
 
 solutions (x : xs) yys (z : zs) clds =
   ofAll (solns (fst clds) x (head yys) z (solutions xs (tail yys) zs)) $
-  ofAll (bindings (head yys) (fromTo (ifNull (tail yys) 1 0) 9))
-        (bindings x (fromTo (ifNull xs 1 0) 9) (snd clds))
-
-curry f x y = f (x, y)
+  ofAll (bindings (head yys) (enumFromTo (ifNull (tail yys) 1 0) 9))
+        (bindings x (enumFromTo (ifNull xs 1 0) 9) (snd clds))
 
 solns c x y z f s =
   let qr = divMod10 (img s x + img s y + c)
@@ -88,24 +47,16 @@ divMod10 n =
   if n <= 9
     then (0, n)
     else case divMod10 (n - 10) of
-           Pair q r -> (q + 1, r)
-
-fromTo n m = n : (if n == m
-                    then []
-                    else fromTo (n + 1) m
-                 )
+           (q, r) -> (q + 1, r)
 
 isSingleton []           = False
 isSingleton [x]          = True
 isSingleton (x : y : ys) = False
 
-and False x = False
-and True x = x
-
 valid x y z =
-  and (length x == length y) $
-  and (length x == length z)
-      (isSingleton $ solutions x y z (0, []))
+  (length x == length y) &&
+  (length x == length z) &&
+  (isSingleton $ solutions x y z (0, []))
 
 sumMap f xs = sumMapAcc f xs 0
 
@@ -119,11 +70,6 @@ fx ys zs x = sumMap (fy x zs) ys
 fy x zs y = sumMap (fz x y) zs
 
 fz x y z = if valid x y z then 1 else 0
-
-length xs = lengthAcc 0 xs
-
-lengthAcc acc [] = acc
-lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
 
 main =
   let words = ["BANA"

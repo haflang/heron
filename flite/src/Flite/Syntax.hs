@@ -85,6 +85,7 @@ primArity p
   | isUnaryPrim p = 1
   | isBinaryPrim p = 2
   | isTernaryPrim p = 3
+  | otherwise = error $ "Not a primitive op: " ++ p
 
 isPredexId :: Id -> Bool
 isPredexId = isBinaryPrim

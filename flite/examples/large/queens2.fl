@@ -1,26 +1,5 @@
-tail (x : xs) = xs
-
 one p [] = []
 one p (x : xs) = if p x then [x] else one p xs
-
-map f [] = []
-map f (x : xs) = f x : map f xs
-
-append []       ys = ys
-append (x : xs) ys = x : append xs ys
-
-concatMap f [] = []
-concatMap f (x : xs) = append (f x) (concatMap f xs)
-
-length xs = lengthAcc 0 xs
-
-lengthAcc acc [] = acc
-lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
-
-replicate n x =
-  if n == 0
-    then []
-    else x : replicate (n - 1) x
 
 l = 0
 r = 1
@@ -34,12 +13,12 @@ down  xs = map (one (eq d)) xs
 
 merge [] ys = []
 merge (x : xs) [] = x : xs
-merge (x : xs) (y : ys) = append x y : merge xs ys
+merge (x : xs) (y : ys) = (x ++ y) : merge xs ys
 
 next mask = merge (merge (down mask) (left mask)) (right mask)
 
 fill [] = []
-fill (x : xs) = append (lrd x xs) (map ((:) x) (fill xs))
+fill (x : xs) = (lrd x xs) ++ (map ((:) x) (fill xs))
 
 lrd [] ys = [[l,r,d] : ys]
 lrd (x : xs) ys = []

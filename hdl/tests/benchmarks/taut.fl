@@ -1,7 +1,11 @@
-find key ((k, v) : t) =
-  if key == k
-    then v
-    else find key t
+data Exp a
+  = And (Exp a) (Exp a)
+  | Const Bool
+  | Implies (Exp a) (Exp a)
+  | Not (Exp a)
+  | Var a
+
+find x s = fromJust $ lookup x s
 
 eval s (Const b)       = b
 eval s (Var x)         = find x s
@@ -12,14 +16,16 @@ eval s (Implies p q)   = if eval s p then eval s q else True
 vars (Const b)         = []
 vars (Var x)           = [x]
 vars (Not p)           = vars p
-vars (And p q)         = append (vars p) (vars q)
-vars (Implies p q)     = append (vars p) (vars q)
+vars (And p q)         = (vars p) ++ (vars q)
+vars (Implies p q)     = (vars p) ++ (vars q)
+
+con x xs = x : xs
 
 bools n = if n == 0
             then [[]]
             else let m = n - 1
-                 in  append (map (Cons False) (bools m))
-                            (map (Cons True ) (bools m))
+                 in  (map (con False) (bools m)) ++
+                     (map (con True ) (bools m))
 
 neq x y = x /= y
 
@@ -30,40 +36,6 @@ substs p = let vs = rmdups (vars p)
            in  map (zip vs) (bools (length vs))
 
 isTaut p = and (map (flip eval p) (substs p))
-
-flip f y x = f x y
-
-length xs = lengthAcc 0 xs
-
-lengthAcc acc [] = acc
-lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
-
-append []       ys = ys
-append (x : xs) ys = x : append xs ys
-
-map f []         = []
-map f (x : xs) = f x : map f xs
-
-and []       = True
-and (b : bs) = if b then and bs else False
-
-filter p []      = []
-filter p (x : xs) =
-  if p x
-    then x : filter p xs
-    else filter p xs
-
-null []       = True
-null (x : xs) = False
-
-zip []       ys       = []
-zip (x : xs) []       = []
-zip (x : xs) (y : ys) = (x, y) : zip xs ys
-
-foldr1 f (x : xs) =
-  if null xs
-    then x
-    else f x (foldr1 f xs)
 
 imp v = Implies (Var 'q') (Var v)
 

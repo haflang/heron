@@ -1,49 +1,17 @@
-min m n = if m <= n then m else n
-max m n = if m <= n then n else m
-gt  m n = if m <= n then False else True
+data Atype a b c =
+    H a b c
+data Btype a b =
+    Hash a b
+data Key =
+    K [Int] Int Int Int
 
-head (x : xs) = x
+insert x [] = x : []
+insert x (y : ys) =
+  if x <= y
+    then x : y : ys
+    else y : insert x ys
 
-last (x : xs) = if null xs then x else last xs
-
-null []       = True
-null (x : xs) = False
-
-length xs = lengthAcc 0 xs
-
-lengthAcc acc [] = acc
-lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
-
-append []       ys = ys
-append (x : xs) ys = x : append xs ys
-
-map f []         = []
-map f (x : xs) = f x : map f xs
-
-concatMap f []       = []
-concatMap f (x : xs) = append (f x) (concatMap f xs)
-
-elem x []       = False
-elem x (y : ys) =
-  if x == y
-    then True
-    else elem x ys
-
-foldr f z []       = z
-foldr f z (x : xs) = f x (foldr f z xs)
-
-filter p []       = []
-filter p (x : xs) =
-  if p x
-    then x : (filter p xs)
-    else filter p xs
-
-enumFromTo m n =
-  if m <= n
-    then m : (enumFromTo ((+) m 1) n)
-    else []
-
-assoc x (Cons (y, z) yzs) =
+assoc x ((y, z) : yzs) =
   if x == y then z else assoc x yzs
 
 assocm x []             = Nothing
@@ -86,9 +54,7 @@ freqSorted ks =
 
 decreasingFrequencyIn ft (K s0 a x n0) (K s1 b y n1) =
   let freq = flip assoc ft
-  in gt (freq a + freq x) (freq b + freq y)
-
-flip f x y = f y x
+  in (freq a + freq x) > (freq b + freq y)
 
 freqTabOf ks = histo (concatMap ends ks)
 
@@ -100,7 +66,7 @@ blockedWith ds (k : ks) =
       eks = endsSubset dsk
       det = filter eks ks
       rest = filter (non eks) ks
-  in k : append det (blockedWith dsk rest)
+  in k : det ++ blockedWith dsk rest
 
 non f x = if f x then False else True
 
@@ -188,7 +154,7 @@ keywordsThree =
   ]
 
 main =
-   case cichelli (append keywordsOne $ append keywordsTwo keywordsThree) of
+   case cichelli (keywordsOne ++ keywordsTwo ++ keywordsThree) of
        Just hf -> emitHashFun hf
        Nothing -> 0
 

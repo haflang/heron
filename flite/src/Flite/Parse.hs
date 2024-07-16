@@ -1,7 +1,8 @@
 module Flite.Parse where
-import qualified Flite.Prelude as Prelude
 import Flite.Syntax
+import Flite.Prelude
 import Flite.Pretty
+import Flite.Traversals
 
 -- import Control.Applicative
 import Control.Arrow hiding (app)
@@ -9,6 +10,7 @@ import Control.Monad
 -- import Control.Monad.State
 import Data.Char hiding (chr)
 import Data.List
+import Data.Maybe (catMaybes)
 import Text.Parsec.Expr
 import Text.Parsec.Indent
 import qualified Text.Parsec.Indent.Explicit as IE
@@ -16,6 +18,7 @@ import Text.Parsec
 import Text.Parsec.Pos (SourcePos)
 import qualified Text.ParserCombinators.Parsec.Token as T
 import Data.Functor.Identity
+import Paths_flite
 
 type Parser a = ParsecT String () (IndentT Identity) a
 
@@ -34,7 +37,11 @@ fliteDef = T.LanguageDef
       , T.reservedOpNames= ["="
                            ,"\\"
                            ,"->"
-                           ,"-","+","==","/=","<="
+                           ,"++"
+                           ,"-","+","==","/=","<=",">"
+                           ,"&&", "||"
+                           ,"."
+                           ,"|", "!!"
                            ]
       , T.reservedNames  = ["let"
                            ,"in"
@@ -64,7 +71,20 @@ whiteSpace    = T.whiteSpace flite
 comma         = T.comma flite
 
 prog :: Parser Prog
-prog = block (whiteSpace *> defn) <* eof
+prog = catMaybes <$> (block (whiteSpace *> def) <* eof)
+  where
+    def = (Nothing <$ try typeDef) <|> try (Just <$> defn)
+
+typeDef :: Parser ()
+typeDef = withPos (do
+  _    <- symbol "data" <|> symbol "type"
+  f    <- try conId
+  args <- many pat
+  reservedOp "="
+  sameOrIndented
+  body <- expr
+  pure ()
+  ) <?> "type def"
 
 tryFor s m = try m <?> s
 
@@ -76,10 +96,13 @@ binaryOp op assoc = Infix (reservedOp op >> return (binApp (Fun $ "(" ++ op ++ "
 listCons = Infix (symbol ":" >> return (binApp (Con "Cons"))) AssocRight
 dollarOp = Infix (symbol "$" >> return (\x y -> App x [y]))   AssocRight
 
-opTable = [ [infixName              , binaryOp "."  AssocRight                        ]
-          , [binaryOp "+" AssocLeft , binaryOp "-"  AssocLeft                         ]
-          , [binaryOp "==" AssocNone, binaryOp "/=" AssocNone, binaryOp "<=" AssocNone]
-          , [listCons               , dollarOp                                        ]
+opTable = [ [infixName              , binaryOp "."  AssocRight                                                ]
+          , [binaryOp "+" AssocLeft , binaryOp "-"  AssocLeft  , binaryOp "!!"  AssocLeft                      ]
+          , [binaryOp "&&" AssocRight, binaryOp "||" AssocRight                                               ]
+          , [binaryOp "==" AssocNone, binaryOp "/=" AssocNone, binaryOp "<=" AssocNone, binaryOp ">" AssocNone]
+          , [listCons               , binaryOp "++" AssocRight , dollarOp                                     ]
+          , [binaryOp "|" AssocLeft -- This is only used to discard type definitions
+            ]
           ]
 
 -- | Constructor names
@@ -117,7 +140,7 @@ primId = tryFor "primitive op" $ do
   symbol ")"
   pure v
   where
-    primitives = ["+", "-", "==", "/=", "<="]
+    primitives = ["++", "+", "-", "==", "/=", "<=", "&&", "||", ">", ".", "$", "!!"]
     wrap f = "(" ++ f ++ ")"
 
 -- | Primitive op
@@ -127,7 +150,7 @@ prim = Fun <$> primId
 -- | Function definitions
 defn :: Parser Decl
 defn = withPos (do
-  f    <- varId
+  f    <- try varId <|> try primId
   args <- many pat
   reservedOp "="
   sameOrIndented
@@ -244,17 +267,22 @@ Something similar for lists
 testParser :: Parser a -> String -> Either ParseError a
 testParser p = runIndent . runParserT p () "test"
 
+supplyPrelude :: Prog -> Prog
+supplyPrelude p = foldr addFunc p prelude'
+  where
+    prelude' =
+      let res = runIndent $ runParserT prog () "prelude" prelude
+      in case res of
+        Left e  -> error . show$ e
+        Right p -> p
+    fns = map funcName p
+    addFunc d@(Func f _ _) p | f `elem` fns = error $ "Source overrides prelude function: " ++ f
+                             | otherwise = d : p
+
 parseProgFile :: SourceName -> IO Prog
 parseProgFile f = do
   src <- readFile f
   let res = runIndent $ runParserT prog () f src
   case res of
     Left e  -> error . show$ e
-    Right p -> return . Prelude.supplyPrelude $ p
-
-{-
-TODO
-
-Handle tuples
-
--}
+    Right p -> pure $ supplyPrelude p

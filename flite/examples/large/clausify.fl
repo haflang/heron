@@ -1,17 +1,23 @@
-map f [] = []
-map f (x : xs) = f x : map f xs
+data Expr a
+  = Con (Expr a) (Expr a)
+  | Dis (Expr a) (Expr a)
+  | Neg (Expr a)
+  | Sym a
+
+insert x [] = x : []
+insert x (y : ys) =
+  if x <= y
+    then x : y : ys
+    else y : insert x ys
 
 clauses ps = map (clause ([], [])) ps
 
 clause (c, a) (Dis p q)     = clause (clause (c, a) p) q
-clause (c, a) (Sym s)       = (ins s c, a)
-clause (c, a) (Neg (Sym s)) = (c, ins s a)
-
-or False x = x
-or True  x = True
+clause (c, a) (Sym s)       = (insert s c, a)
+clause (c, a) (Neg (Sym s)) = (c, insert s a)
 
 contains eq [] y = False
-contains eq (x : xs) y = or (eq x y) (contains eq xs y)
+contains eq (x : xs) y = eq x y || contains eq xs y
 
 disin (Sym s) = Sym s
 disin (Neg p) = Neg p
@@ -28,20 +34,6 @@ din2 p (Dis q r) = Dis p (Dis q r)
 din2 p (Neg q) = Dis p (Neg q)
 din2 p (Sym s) = Dis p (Sym s)
 
-ins x [] = [x]
-ins x (y : ys) =
-  if x == y
-    then y : ys
-    else if x <= y
-           then x : y : ys
-           else y : ins x ys
-
-filter p [] = []
-filter p (x : xs) =
-  if p x
-    then x : filter p xs
-    else filter p xs
-
 inter eq xs ys = filter (contains eq xs) ys
 
 negin (Neg (Con p q)) = Dis (negin (Neg p)) (negin (Neg q))
@@ -54,20 +46,14 @@ negin (Sym s)         = Sym s
 
 nonTaut cs = filter notTaut cs
 
-and False x = False
-and True x = x
-
 eqList f [] [] = True
 eqList f [] (y : ys) = False
 eqList f (x : xs) [] = False
-eqList f (x : xs) (y : ys) = and (f x y) (eqList f xs ys)
+eqList f (x : xs) (y : ys) = f x y && eqList f xs ys
 
 eq a b = a == b
 
-eqClause (a, b) (c, d) = and (eqList eq a c) (eqList eq b d)
-
-null [] = True
-null (x : xs) = False
+eqClause (a, b) (c, d) = eqList eq a c && eqList eq b d
 
 notTaut (c, a) = null (inter eq c a)
 
@@ -81,24 +67,15 @@ clausify p = uniq    $
 split p = spl [] p
 
 spl a (Con p q) = spl (spl a p) q
-spl a (Dis p q) = Cons (Dis p q) a
-spl a (Neg p) = Cons (Neg p) a
-spl a (Sym s) = Cons (Sym s) a
-
-append [] ys = ys
-append (x : xs) ys = x : append xs ys
+spl a (Dis p q) = Dis p q : a
+spl a (Neg p) = Neg p : a
+spl a (Sym s) = Sym s : a
 
 comp f g x = f (g x)
 
-not False = True
-not True = False
-
-union eq xs ys = append xs (filter (comp not (contains eq xs)) ys)
+union eq xs ys = xs ++ filter (comp not (contains eq xs)) ys
 
 singleton x = x : []
-
-foldr f z [] = z
-foldr f z (x : xs) = f x (foldr f z xs)
 
 uniq xs = foldr (comp (union eqClause) singleton) [] xs
 
@@ -107,17 +84,7 @@ display (c : cs) = emitClause c + display cs
 
 emitClause (c, a) = sum c + sum a
 
-sum xs = sumAcc 0 xs
-
-sumAcc acc [] = acc
-sumAcc acc (x : xs) = sumAcc (acc + x) xs
-
 eqv a b = Con (Dis (Neg a) b) (Dis (Neg b) a)
-
-replicate n a =
-  if n == 0
-    then []
-    else a : replicate ((-) n 1) a
 
 main = let p = eqv (eqv a $ eqv a a) $
                     eqv (eqv a $ eqv a a)

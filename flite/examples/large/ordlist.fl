@@ -1,39 +1,31 @@
+data Nat
+  = S Nat
+  | Z
+
 implies False x = True
 implies True  x = x
 
-and False x = False
-and True  x = x
-
-andList []       = True
-andList (x : xs) = and x (andList xs)
-
-append [] ys       = ys
-append (x : xs) ys = x : append xs ys
-
-map f [] = []
-map f (x : xs) = f x : map f xs
-
 ord []           = True
 ord [x]          = True
-ord (x : y : ys) = and (implies x y) (ord (y : ys))
+ord (x : y : ys) = (implies x y) && (ord (y : ys))
 
-insert x [] = [x]
-insert x (y : ys) =
+ins x [] = [x]
+ins x (y : ys) =
   if implies x y
     then x : y : ys
-    else y : insert x ys
+    else y : ins x ys
 
-prop x xs = implies (ord xs) (ord (insert x xs))
+prop x xs = implies (ord xs) (ord (ins x xs))
 
 boolList Z = [[]]
 boolList (S n) =
-  append (boolList n) $
-  append (map ((:) False) (boolList n))
-         (map ((:) True ) (boolList n))
+  boolList n ++
+  map ((:) False) (boolList n) ++
+  map ((:) True ) (boolList n)
 
-top n = andList $
-        append (map (prop True ) (boolList n))
-               (map (prop False) (boolList n))
+top n = and $
+        map (prop True ) (boolList n) ++
+        map (prop False) (boolList n)
 
 main =
   let num = S $ S $ S $ S $ S $ S $ S $ S $ S $ S $ S $ S Z

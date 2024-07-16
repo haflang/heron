@@ -1,5 +1,17 @@
-map f [] = []
-map f (x : xs) = f x : map f xs
+data Outcome =
+    Draw
+  | Loss
+  | Win
+
+data Player =
+    O
+  | X
+
+insert x [] = x : []
+insert x (y : ys) =
+  if x <= y
+    then x : y : ys
+    else y : insert x ys
 
 bestOf Win  v = Win
 bestOf Loss v = v
@@ -11,11 +23,6 @@ inverse Loss = Win
 inverse Draw = Draw
 inverse Win  = Loss
 
-fromTo n m =
-  if n <= m
-    then n : fromTo (n + 1) m
-    else []
-
 cmp a b =
   if a == b
     then EQ
@@ -23,15 +30,6 @@ cmp a b =
       if a <= b
         then LT
         else GT
-
-insert x [] = x : []
-insert x (y : ys) =
-  if x <= y
-    then x : y : ys
-    else y : insert x ys
-
-foldr1 f (x : []) = x
-foldr1 f (x : (y : ys)) = f x (foldr1 f (y : ys))
 
 diff [] ys = []
 diff (x : xs) [] = x : xs
@@ -41,28 +39,17 @@ diff (x : xs) (y : ys) =
     EQ -> diff xs ys
     GT -> diff (x : xs) ys
 
-null [] = True
-null (x : xs) = False
-
 subset xs ys = null (diff xs ys)
 
-or False x = x
-or True x  = True
-
 hasLine p =
-  or (subset [1,2,3] p)
-   $ or (subset [4,5,6] p)
-      $ or (subset [7,8,9] p)
-        $ or (subset [1,4,7] p)
-          $ or (subset [2,5,8] p)
-            $ or (subset [3,6,9] p)
-              $ or (subset [1,5,9] p)
-                   (subset [3,5,7] p)
-
-length xs = lengthAcc 0 xs
-
-lengthAcc acc [] = acc
-lengthAcc acc (x : xs) = lengthAcc (acc + 1) xs
+  subset [1,2,3] p ||
+  subset [4,5,6] p ||
+  subset [7,8,9] p ||
+  subset [1,4,7] p ||
+  subset [2,5,8] p ||
+  subset [3,6,9] p ||
+  subset [1,5,9] p ||
+  subset [3,5,7] p
 
 gridFull ap pp = length ap + length pp == 9
 
@@ -73,7 +60,7 @@ analysis ap pp =
       if gridFull ap pp
         then Draw
         else foldr1 bestOf (map (moveval ap pp)
-                                (diff (diff (fromTo 1 9) ap) pp))
+                                (diff (diff (enumFromTo 1 9) ap) pp))
 
 moveval ap pp m = inverse (analysis pp (insert m ap))
 

@@ -1,86 +1,21 @@
-inc i = i + 1
-dec i = i - 1
+data ADT_0 a
+  = Fun [a] [ADT_0 a]
+  | Var [a]
 
-dis True  q = True
-dis False q = q
-
-con True  q = q
-con False q = False
-
-not True  = False
-not False = True
+data ADT_1 a
+  = Weights a [([a], a)]
 
 non f x  =  not (f x)
 
-isNothing Nothing  = True
-isNothing (Just x) = False
-
-isJust Nothing   =  False
-isJust (Just x)  =  True
-
-fromJust (Just x) = x
-
-maybe n j Nothing  = n
-maybe n j (Just x) = j x
-
-fst (x, y) = x
-
-snd (x, y) = y
-
-id x = x
-
-curry f x y = f (x, y)
-
-uncurry f (x, y) = f x y
-
-flip f x y = f y x
-
 cross f g (x, y) = (f x, g y)
 
-both p (x, y) = con (p x) (p y)
-
-null []       = True
-null (x : xs) = False
-
-head (x : xs) = x
-
-tail (x : xs) = xs
-
-append []       ys = ys
-append (x : xs) ys = x : append xs ys
-
-map f []       =  []
-map f (x : xs) =  f x : map f xs
-
-concatMap f []       =  []
-concatMap f (x : xs) =  append (f x) (concatMap f xs)
+both p (x, y) = p x && p y
 
 elemBy e x []       = False
 elemBy e x (y : ys) =
   if e x y
     then True
     else elemBy e x ys
-
-elemAt (x : xs) n =
-  if n == 0
-    then x
-    else elemAt xs (dec n)
-
-filter p []       =  []
-filter p (x : xs) =
-  if p x
-    then x : filter p xs
-    else filter p xs
-
-foldr f z []       = z
-foldr f z (x : xs) = f x (foldr f z xs)
-
-zipWith f []       []       = []
-zipWith f []       (y : ys) = []
-zipWith f (x : xs) []       = []
-zipWith f (x : xs) (y : ys) = f x y : zipWith f xs ys
-
-zip  =  zipWith (,)
 
 unlines []       =  ""
 unlines (s : ss) =  append s ('\n' : unlines ss)
@@ -89,30 +24,7 @@ unlines (s : ss) =  append s ('\n' : unlines ss)
 emitStr []       k = k
 emitStr (c : cs) k =  c + emitStr cs k
 
-length []       =  0
-length (x : xs) =  inc (length xs)
-
-repeat x = x : repeat x
-
-last (x : xs) =
-  if null xs
-    then x
-    else last xs
-
-enumFromTo m n  =
-  if m <= n
-    then m : enumFromTo (inc m) n
-    else []
-
-plus a b = a + b
-
-sum xs  =  foldr plus 0 xs
-
-concatStrings ss  =  foldr append "" ss
-
-and xs  =  foldr con True xs
-
-all p xs  =  and (map p xs)
+concatStrings ss  =  foldr (++) "" ss
 
 unionBy e xs ys  =  foldr (insBy e) xs ys
 
@@ -139,9 +51,9 @@ lookUpBy e x ((y, v) : yvs) =
 equalStrings []       []       = True
 equalStrings []       (y : ys) = False
 equalStrings (x : xs) []       = False
-equalStrings (x : xs) (y : ys) =  con (x == y) (equalStrings xs ys)
+equalStrings (x : xs) (y : ys) =  (x == y) && (equalStrings xs ys)
 
-showResult (Just trs) sig  =  append "\nSuccess\n" (showRules sig (map rn trs))
+showResult (Just trs) sig  =  "\nSuccess\n" ++ showRules sig (map rn trs)
 showResult Nothing    sig  =  "\nFailure\n"
 
 varWeight (Weights vw fws) = vw
@@ -178,8 +90,8 @@ main =
 checkEquations es sig = all (both (checkTerm sig)) es
 
 checkTerm sig (Var v)    = True
-checkTerm sig (Fun f ts) = con (length ts == arity sig f)
-                               (all (checkTerm sig) ts)
+checkTerm sig (Fun f ts) = (length ts == arity sig f) &&
+                           (all (checkTerm sig) ts)
 
 rn (l, r) = let sub = zip (vars l) (map Var variables)
             in  (subst sub l, subst sub r)
@@ -213,7 +125,7 @@ completionLoop sig vs n (p : rest) rules =
              case orient newEqn of
                Nothing      -> Nothing
                Just newRule ->
-                 completionWith sig ws (inc n) rest newRule rules
+                 completionWith sig ws (succ n) rest newRule rules
 
 completionWith sig vs n rest newRule rules =
   let rs = newRule : rules
@@ -224,7 +136,7 @@ completionWith sig vs n rest newRule rules =
 
 completionWith2 (eqs, rls) sig rs rest cps k =
   k (simplifyEquations sig rs $
-     append rest $ append eqs cps)
+     rest ++ eqs ++ cps)
     (uniqueRules rls)
 
 orient (t1, t2) =
@@ -235,7 +147,7 @@ orient (t1, t2) =
            else Nothing
 
 getCriticalPairs trs r  =
-  append (selfCriticalPairs trs r) (concatMap (duoCriticalPairs trs r) trs)
+  (selfCriticalPairs trs r) ++ (concatMap (duoCriticalPairs trs r) trs)
 
 simplifyRules sig rule trs  =
   case reduceSplit sig rule trs of
@@ -259,8 +171,7 @@ reduceSplit sig rule ((l, r) : rs) =
   let reducedl = reduce [rule] l
   in case reduceSplit sig rule rs of
        (eqns, rules) ->
-         if dis (null reducedl)
-                (reducible (Cons (Pair l r) []) (left rule))
+         if null reducedl || reducible [(l, r)] (left rule)
            then (eqns, (l, r) : rules)
            else ((head reducedl, r) : eqns
                 , rules
@@ -270,8 +181,8 @@ selfCriticalPairs trs (l1, r1) =
   criticalPairs trs False (l1, r1) (rename (l1, r1))
 
 duoCriticalPairs trs (l1, r1) (l2, r2)  =
-  append (criticalPairs trs True  (l1, r1) (l2, r2))
-         (criticalPairs trs False (l2, r2) (l1, r1))
+  (criticalPairs trs True  (l1, r1) (l2, r2)) ++
+  (criticalPairs trs False (l2, r2) (l1, r1))
 
 criticalPairs trs allowRootPos (l1, r1) (l2, r2) =
   let  ps = if allowRootPos
@@ -310,10 +221,10 @@ kbGreaterThan w t s =
       ws  =  termWeight w s
       nt  =  map snd (varCounts t vs)
       ns  =  map snd (varCounts s vs)
-  in dis (con (not (wt <= ws)) (compareAll leq ns nt))
-         (con (con (wt == ws ) (compareAll eq  nt ns))
-              (dis (powerOf (last (funSequence w)) t s)
-                   (funcAfter w t s)
+  in (not (wt <= ws) && compareAll leq ns nt) ||
+         ( ((wt == ws ) && (compareAll eq  nt ns)) &&
+              (powerOf (last (funSequence w)) t s ||
+               funcAfter w t s
               )
          )
 
@@ -322,12 +233,13 @@ termWeight w (Fun f ts) = funWeight w f + sum (map (termWeight w) ts)
 
 powerOf fn (Var v)          u = False
 powerOf fn (Fun f [])       u = False
-powerOf fn (Fun f (x : xs)) u = con (con (isVar u) (equalStrings f fn))
-                                    (con (null xs) (pow fn x))
+powerOf fn (Fun f (x : xs)) u = (isVar u && equalStrings f fn) &&
+                                (null xs && pow fn x)
 
 pow fn (Var v)          = True
-pow fn (Fun f (z : zs)) = con (equalStrings f fn)
-                              (con (null zs) (pow fn z))
+pow fn (Fun f (z : zs)) = equalStrings f fn &&
+                          null zs &&
+                          pow fn z
 
 funcAfter w (Var v)    (Var x)    = False
 funcAfter w (Var v)    (Fun g us) = False
@@ -348,7 +260,7 @@ varAt t p = case subterm t p of
 tally k []             = []
 tally k ((x, nx) : xs) =
   if equalStrings k x
-    then (x, (inc nx)) : xs
+    then (x, (succ nx)) : xs
     else (x, nx)       : tally k xs
 
 orderLex f []       []       = False
@@ -359,32 +271,36 @@ orderLex f (x : xs) (y : ys) =
     then orderLex f xs ys
     else f x y
 
-before (h : t) x y = dis (equalStrings h x)
-                         (con (not (equalStrings h y))
-                              (before t x y)) 
+before (h : t) x y = equalStrings h x ||
+                     (not (equalStrings h y) &&
+                      before t x y)
 
 showTerm sig (Var v)    = v
 showTerm sig (Fun f ts) =
   if isInfix sig f
-    then append "("                          $
-         append (showTerm sig (elemAt ts 0)) $
-         append " "                          $
-         append f                            $
-         append " "                          $
-         append (showTerm sig (elemAt ts 1)) ")"
+    then "("                          ++
+         (showTerm sig (ts !! 0)) ++
+         " "                          ++
+         f                            ++
+         " "                          ++
+         (showTerm sig (ts !! 1)) ++
+         ")"
     else if null ts
            then f
-           else append f   $
-                append "(" $
-                append (concatStrings (intersperse "," (map (showTerm sig) ts))) ")"
+           else f   ++
+                "(" ++
+                (concatStrings (intersperse "," (map (showTerm sig) ts))) ++
+                ")"
 
-showEqn sig (x, y) = append (showTerm sig x) $
-                     append " = " (showTerm sig y)
+showEqn sig (x, y) = (showTerm sig x) ++
+                     " = "            ++
+                     (showTerm sig y)
 
 showEqns sig eqns = unlines (map (showEqn sig) eqns)
 
-showRule sig (x, y) = append (showTerm sig x) $
-                      append " -> " (showTerm sig y)
+showRule sig (x, y) = (showTerm sig x) ++
+                      " -> " ++
+                      (showTerm sig y)
 
 showRules sig rules  =  unlines (map (showRule sig) rules)
 
@@ -395,7 +311,7 @@ right = snd
 uniqueRules = nubBy equivPair
 
 equivPair (a, b) (c, d)  =
-  dis (con (equiv a c) (equiv b d)) (con (equiv a d) (equiv b c))
+  (equiv a c && equiv b d) || (equiv a d && equiv b c)
 
 unify t1 t2 = unifyWith [t1] [t2] []
 
@@ -418,10 +334,10 @@ unifyWith (Fun f ts : ts1) (t : ts2) sub =
   case t of
     Var v    -> unifyWith (Var v : ts2) (Fun f ts : ts1) sub
     Fun g us -> if equalStrings f g
-                  then unifyWith (append ts ts1) (append us ts2) sub
+                  then unifyWith (ts ++ ts1) (us ++ ts2) sub
                   else Nothing
 
-substAdd subNew subOld = append subNew (map (cross id (subst subNew)) subOld)
+substAdd subNew subOld = subNew ++ (map (cross id (subst subNew)) subOld)
 
 match t1 t2  =  matchWith [t1] [t2] []
 
@@ -431,12 +347,12 @@ matchWith (Var v : ts1) (t : ts2) sub =
     then if equalTerms t (subst sub (Var v))
            then matchWith ts1 ts2 sub
            else Nothing
-    else matchWith ts1 ts2 (Cons (Pair v t) sub)
+    else matchWith ts1 ts2 ((v, t) : sub)
 matchWith (Fun f ts : ts1) (t : ts2) sub =
   case t of
     Var v    -> Nothing
     Fun g us -> if equalStrings f g
-                  then matchWith (append ts ts1) (append us ts2) sub
+                  then matchWith (ts ++ ts1) (us ++ ts2) sub
                   else Nothing
 
 normalForms trs t =
@@ -475,23 +391,23 @@ subst s (Fun f ts) = Fun f (map (subst s) ts)
 equalTerms (Var v)    (Var w)    = equalStrings v w
 equalTerms (Var v)    (Fun g us) = False
 equalTerms (Fun f ts) (Var w)    = False
-equalTerms (Fun f ts) (Fun g us) = con (equalStrings f g)
-                                       (and (zipWith equalTerms ts us))
+equalTerms (Fun f ts) (Fun g us) = equalStrings f g &&
+                                   and (zipWith equalTerms ts us)
 
 applyToIndex f n (x : xs) =
   if n == 0
     then f x : xs
-    else x : applyToIndex f (dec n) xs
+    else x : applyToIndex f (pred n) xs
 
-equiv t u = con (isJust (match t u)) (isJust (match u t))
+equiv t u = isJust (match t u) && isJust (match u t)
 
 subterm t []           = t
 subterm t (p1 : pRest) =
-  case t of Fun f ts -> subterm (elemAt ts (dec p1)) pRest
+  case t of Fun f ts -> subterm (ts !! (pred p1)) pRest
 
 placeAt t []          u = t
 placeAt t (p : pRest) u =
-  case u of Fun f ts -> Fun f (applyToIndex (placeAt t pRest) (dec p) ts)
+  case u of Fun f ts -> Fun f (applyToIndex (placeAt t pRest) (pred p) ts)
 
 vars (Var v)    = [v]
 vars (Fun f ts) = foldr (unionBy equalStrings) [] (map vars ts)
@@ -500,7 +416,9 @@ positions (Var v)    = [[]]
 positions (Fun f ts) = [] : concatMap (argPositions ts)
                                       (enumFromTo 1 (length ts))
 
-argPositions ts n = map (Cons n) (positions (elemAt ts (dec n)))
+con x xs = x : xs
+
+argPositions ts n = map (con n) (positions (ts !! (pred n)))
 
 variety = "" : concatMap variations variety
 

@@ -1,3 +1,30 @@
+type Var = Int
+
+data Arith
+  = Add Arith Arith
+  | N Int
+  | Sub Arith Arith
+  | V Var
+
+data Bools
+  = And Bools Bools
+  | Eq Arith Arith
+  | FALSE
+  | Le Arith Arith
+  | Neg Bools
+  | TRUE
+
+data Statement
+  = Ass Var Arith
+  | Comp Statement Statement
+  | If Bools Statement Statement
+  | Skip
+  | While Bools Statement
+
+data State
+  = Final [(Var, Int)]
+  | Inter Statement [(Var, Int)]
+
 value ((x, y) : s) v k =
   if x == v
     then k y
@@ -16,33 +43,27 @@ int n k = if n == 0 then k 0 else k n
 bool False k = k False
 bool True k  = k True
 
-not False = True
-not True  = False
-
-and False x = False
-and True x  = x
-
 add  k a b = int  (a + b  ) k
 sub  k a b = int  (a - b  ) k
 eq   k a b = bool (a == b ) k
 leq  k a b = bool (a <= b ) k
 notk k a   = bool (not a  ) k
-andk k a b = bool (and a b) k
+andk k a b = bool (a && b) k
 
-seq f g k = f (comp g k)
+seqq f g k = f (comp g k)
 comp f g x = f (g x)
 
 aval (N n) s k = k n
 aval (V x) s k = value s x k
-aval (Add a1 a2) s k = seq (aval a1 s) (aval a2 s) (add k)
-aval (Sub a1 a2) s k = seq (aval a1 s) (aval a2 s) (sub k)
+aval (Add a1 a2) s k = seqq (aval a1 s) (aval a2 s) (add k)
+aval (Sub a1 a2) s k = seqq (aval a1 s) (aval a2 s) (sub k)
 
 bval TRUE s k = k True
 bval FALSE s k = k False
-bval (Eq a1 a2) s k = seq (aval a1 s) (aval a2 s) (eq k)
-bval (Le a1 a2) s k = seq (aval a1 s) (aval a2 s) (leq k)
+bval (Eq a1 a2) s k = seqq (aval a1 s) (aval a2 s) (eq k)
+bval (Le a1 a2) s k = seqq (aval a1 s) (aval a2 s) (leq k)
 bval (Neg b) s k = bval b s (notk k)
-bval (And a1 a2) s k = seq (bval a1 s) (bval a2 s) (andk k)
+bval (And a1 a2) s k = seqq (bval a1 s) (bval a2 s) (andk k)
 
 sosstm (Ass x a) s = aval a s (update s x Final)
 sosstm Skip s = Final s
@@ -61,8 +82,6 @@ run (Inter ss s) = run (sosstm ss s)
 run (Final s) = s
 
 ssos ss s = run (Inter ss s)
-
-id x = x
 
 divide = While (Le (V 1) (V 0)) $
          Comp (Ass 0 (Sub (V 0) (V 1)))

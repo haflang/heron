@@ -1,20 +1,3 @@
-and False a = False
-and True a = a
-
-map f [] = []
-map f (x : xs) = f x : map f xs
-
-append [] ys = ys
-append (x : xs) ys = x : append xs ys
-
-concatMap f [] = []
-concatMap f (x : xs) = append (f x) (concatMap f xs)
-
-length xs = lengthAcc 0 xs
-
-lengthAcc acc [] = acc
-lengthAcc acc (x : xs) = lengthAcc (acc+1) xs
-
 nsoln nq = length (gen nq nq)
 
 gen nq n =
@@ -30,9 +13,9 @@ gen2 b q = if safe q 1 b
 
 safe x d [] = True
 safe x d (q : l) =
-  and (x /= q)     $
-  and (x /= q + d) $
-  and (x /= q - d) $
+  (x /= q)   &&
+  (x /= q + d) &&
+  (x /= q - d) &&
   safe x (d + 1) l
 
 toOne n = if n == 1
