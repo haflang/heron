@@ -17,10 +17,6 @@ elemBy e x (y : ys) =
     then True
     else elemBy e x ys
 
-unlines []       =  ""
-unlines (s : ss) =  append s ('\n' : unlines ss)
-  -- TODO do we parse characters OK?
-
 emitStr []       k = k
 emitStr (c : cs) k =  c + emitStr cs k
 

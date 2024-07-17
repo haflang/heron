@@ -60,14 +60,12 @@ dumpTestsuites :: FilePath -> IO ()
 dumpTestsuites f = zipWithM_ dumpTestsuite dirs fs
   where
     dirs =
-      [ "../flite/examples/tiny/",
-        "../flite/examples/small/",
+      [ "../flite/examples/small/",
         "../flite/examples/large/"
       ]
     fs =
-      [ "/tmp/tinys_" ++ f ++ ".py",
-        "/tmp/smalls_" ++ f ++ ".py",
-        "/tmp/larges_" ++ f ++ ".py"
+      [ "./smalls_" ++ f ++ ".py",
+        "./larges_" ++ f ++ ".py"
       ]
 
 dumpTestsuite :: FilePath -> FilePath -> IO ()

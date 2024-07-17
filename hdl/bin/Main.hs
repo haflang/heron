@@ -9,6 +9,7 @@ import           Control.Monad
 import           Prelude
 import           System.Environment
 import           System.Exit
+import Heron (dumpTestsuites)
 
 main :: IO ()
 main
@@ -16,16 +17,21 @@ main
 
        let fname = last args
        let usage = unlines
-                   ["Usage: heron {--clash <clash_options> | -s <flite_src> | -d <flite_src>}"
+                   ["Usage: heron {--clash <clash_options> | -s <flite_src> | -d <flite_src> | -p <suffix>}"
                    ,""
                    ,"  -s : Run a simulation with the given program as input"
                    ,"  -d : Dump a binary representation of the given program"
+                   ,"  -p : Dump testsuite as a Python module (for use with PYNQ deployments). Argument is used as a suffix for output filenames."
                    ]
 
        when ("-d" `elem` args) $
                  compileBenchmark fname
              >>= dumpTemplates . snd . encProg
              >>= mapM_ putStrLn
+             >>  exitSuccess
+
+       when ("-p" `elem` args) $
+                 dumpTestsuites fname
              >>  exitSuccess
 
        when ("-s" `elem` args) $
