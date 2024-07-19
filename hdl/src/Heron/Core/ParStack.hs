@@ -5,7 +5,7 @@
 
 {-| A parallel stack structure with access to \( 2^p \) contiguous elements
   simultaneously. Based on the octostack implementation from
-  [Reduceron](https://www.cs.york.ac.uk/fp/reduceron/).
+  [Reduceron](https://mn416.github.io/reduceron-project/).
 -}
 module Heron.Core.ParStack
   ( -- *  Generation

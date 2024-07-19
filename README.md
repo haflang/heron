@@ -8,7 +8,7 @@ purpose processor core for pure, non-strict functional languages.
 </p>
 
 We consider this a spiritual successor to the [Reduceron
-project](https://www.cs.york.ac.uk/fp/reduceron/), extending their ideas around
+project](https://mn416.github.io/reduceron-project/), extending their ideas around
 FPGA implementation of a template instantiation machine. The bulk of the
 compiler is a modified version of their F-lite compiler, while the hardware
 description is completely reimplemented in [Clash](https://clash-lang.org/).
