@@ -31,11 +31,6 @@ minus a b = a - b
 
 cross (f, g) (x, y) = (f x, g y)
 
-unzip []             = ([],[])
-unzip ((x, y) : xys) =
-  let  u = unzip xys
-  in  (x : (fst u), y : (snd u))
-
 kindToChar k =
   case k of
     King   -> 'K'
