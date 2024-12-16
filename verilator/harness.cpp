@@ -8,9 +8,9 @@ using namespace std;
 
 // Here are our interface lists for _one_ configuration... how to do we
 // automatically generalise for the code data and gc threshold widths?
-#define TEMPLATE_SZ 361
+#define TEMPLATE_SZ 322
 #define GC_THRES 1000
-#define WORDS_PER_TEMPLATE 12
+#define WORDS_PER_TEMPLATE 11
 #define ERR_HEAP_FULL 0x27ffc
 
 vluint64_t main_time = 1;       // Current simulation time
@@ -119,17 +119,7 @@ void report(VtopEntity *top) {
 }
 
 void report_intermediate(VtopEntity *top) {
-  int ret = top->ret;
-  int mutCycles = top->stats[3];
-  int gcRootCycles = top->stats[2];
-  int gcWaitCycles = top->stats[1];
-  int gcWorstStallCycles = top->stats[0];
-
   cout << "CTick "  << main_time
-       << " MUT "   << mutCycles
-       << " ROOTS " << gcRootCycles
-       << " WAITS " << gcWaitCycles
-       << " STALL " << gcWorstStallCycles
        << "\t\r"    << flush;
   return;
 }

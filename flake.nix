@@ -26,6 +26,7 @@
             vivado
             heron-alveo
             heron-ultra96
+            heron-pynqz2-vio
             heron-clash
             heron-verilated
             heron-emu;

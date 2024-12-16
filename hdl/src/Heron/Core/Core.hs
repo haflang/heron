@@ -31,7 +31,7 @@ import           Control.Lens                                 hiding (Index,
                                                                assign, at, imap,
                                                                op, (:>))
 import           Control.Monad.State                          hiding (fail)
-import           Data.Maybe                                   (fromMaybe, fromJust, isJust)
+import           Data.Maybe                                   (fromMaybe, isJust)
 import qualified Prelude                                      as P
 import           RetroClash.Barbies
 import           RetroClash.CPU                               hiding (update)

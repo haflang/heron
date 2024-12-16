@@ -439,7 +439,7 @@ dashIf False = id
 forcePtrTag :: PtrTag -> Atom -> Atom
 forcePtrTag PSeq (Ptr _ addr) = Ptr PSeq addr
 forcePtrTag PPar (Ptr _ addr) = Ptr PPar addr
-forcePtrTag _ a = Fun 1 1 True -- Resolves to the `id` function. Used as a hack
+forcePtrTag _ _ = Fun 1 1 True -- Resolves to the `id` function. Used as a hack
                                -- for ignoring seq/pars on arguments who turn
                                -- out to not be heap references.
 

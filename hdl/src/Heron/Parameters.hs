@@ -73,14 +73,15 @@ type UStkSize = 4096
 -- | Depth of /p/pdate stack
 type PStkSize = 1024
 -- | Depth of heap memory
-type HeapSize = 12*1024
+type HeapSize = 8*1024
+  -- ^ Reduced to 8k so we can fit atoms in 18-bit BRAMs with new `PtrTag`s
 -- | Size of the GC's Mutation Buffer for handling updates
 type GCMutBufSize = 8
 -- | Depth of template memory
 type RomSize = 1024
 -- | Maximum applications across split templates. Informs how many addresses we
 -- reserve on the free list before counting the heap as dangerously full
-type MaxFnAps = 32*2
+type MaxFnAps = 90
 
 ---- Field widths
 -- | Constructor tag width
@@ -97,7 +98,7 @@ type MaxArgs = 7
 -- Circuit's non-functional properties
 
 -- | Target clock period in picoseconds
-type ClkT = 5405
+type ClkT = 5882 -- 170 MHz
 
 data MemoryArch = UltraRAM | BlockRAM
 data HeapArch (a :: MemoryArch) = MkHeapArch
@@ -128,5 +129,5 @@ instance KnownHeapArch (HeapArch 'BlockRAM) where
   specialiseHeap _ _ a = a
 
 -- | Heap memory architecture
-heapConfig :: HeapArch 'UltraRAM
+heapConfig :: HeapArch 'BlockRAM
 heapConfig  = MkHeapArch

@@ -147,7 +147,7 @@ instAtom ::
   -- | Atom to instantiate
   Atom ->
   Atom
-instAtom _ _ stk _ _ (ARG sh s p n) = dash sh (stk !! n)
+instAtom _ _ stk _ _ (ARG sh _ _ n) = dash sh (stk !! n)
 instAtom _ _ _ _ regs (REG sh n) = dash sh (regs !! n)
 instAtom aOld aNext _ _ _ (VAR sh s p n)
   | n >= 0 = VAR sh s p (aNext !! n)

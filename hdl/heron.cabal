@@ -57,6 +57,7 @@ common common-options
     Cabal >= 2.4,
     base,
     clash-prelude >= 1.6.4 && < 1.9,
+    clash-cores,
     deepseq,
     extra,
     flite == 0.6.2,

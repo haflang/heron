@@ -19,11 +19,13 @@ module Heron.Board
   , heronPE
   -- * Top-level synthesisable circuits
   , topEntity
+  , topWithVIO
   , testBench
   ) where
 
 import           Barbies.TH
 import           Clash.Annotations.TH
+import Clash.Cores.Xilinx.VIO
 import           Clash.Explicit.Testbench
 import           Clash.Prelude                         hiding (read)
 import qualified Clash.Prelude.Testbench               as TB
@@ -93,7 +95,9 @@ heronPE PEIn{..} = (PEOut {..}, debug)
     debug = bundle ( bundle CPUIn{..}, bundle CPUOut{..}
                    , bundle GCIn{..} , bundle GCOut{..}
                    )
-    (_peStats, _peResult) = unbundle _result
+    (_peStats, _peResult) = unbundle result
+    result = let capture = (isJust .snd <$> _result) .||. (isJust <$> peGo)
+             in regEn (unpack 0) capture _result
 
     -- Memory structure primitives
     uStkRam    = blockRam1 ClearOnReset (SNat @UStkSize) Nothing
@@ -163,6 +167,24 @@ heronPE PEIn{..} = (PEOut {..}, debug)
 
 createDomain vSystem{vName="DomIn"  , vPeriod=  snatToNum (SNat @ClkT)}
 
+type HeronIn = Signal DomIn
+  ( "codeWE"   ::: Bool
+  -- ^ Template memeory write enable
+  , "codeAddr" ::: TemplAddr
+  -- ^ Template memeory address
+  , "codeData" ::: (BitVector (BitSize Template))
+  -- ^ Template memeory data
+  , "go"       ::: Bool
+  -- ^ Start signal
+  , "gcThres"  ::: HeapAddr
+  )
+
+type HeronOut = Signal DomIn
+  ("ret"    ::: Atom
+  ,"stats"  ::: CPUStats
+  ,"retVld" ::: Bool
+  )
+
 -- | The main synthesisable system with explicit clock, resets, enables, and
 -- port names.
 topEntity
@@ -172,29 +194,20 @@ topEntity
   -- ^ Reset
   -> "en"  ::: Enable DomIn
   -- ^ Enable
-  -> "codeWE"   ::: Signal DomIn Bool
-  -- ^ Template memeory write enable
-  -> "codeAddr" ::: Signal DomIn TemplAddr
-  -- ^ Template memeory address
-  -> "codeData" ::: Signal DomIn (BitVector (BitSize Template))
-  -- ^ Template memeory data
-  -> "go"       ::: Signal DomIn Bool
-  -- ^ Start signal
-  -> "gcThres"  ::: Signal DomIn HeapAddr
-  -- ^ GC threshold signal
-  -> ("ret"    ::: Signal DomIn Atom
-     ,"stats"  ::: Signal DomIn CPUStats
-     ,"retVld" ::: Signal DomIn Bool
-     )
+  -> HeronIn
+  -> HeronOut
   -- ^ Return result atom
-topEntity clkIn rstIn enIn cWe cAddr cData go gcThres =
+topEntity clkIn rstIn enIn ins = reg defOut $ bundle
   ( fromMaybe (unpack 0) <$> _peResult peOut
   , _peStats peOut
   , isJust <$> _peResult peOut
   )
   where
+    (cWe, cAddr, cData, go, gcThres) = unbundle ins
     reg :: NFDataX a => a -> Signal DomIn a -> Signal DomIn a
     reg d x = withClockResetEnable @DomIn clkIn rstIn enIn $ register d x
+
+    defOut = (unpack 0 :: Atom, CPUStats 0 0 0 0, False)
 
     -- Register inputs
     cWe'     = reg False cWe
@@ -216,6 +229,30 @@ topEntity clkIn rstIn enIn cWe cAddr cData go gcThres =
 
 {-# NOINLINE topEntity #-}
 makeTopEntity 'topEntity
+
+vioHeron
+  :: BitSize Template <= 512 -- We pack templates into two 256 words for VIO
+  => Clock DomIn
+  -> HeronOut -> HeronIn
+vioHeron clk = fmap mergeTmpl . vioProbe @DomIn ins outs defOut clk
+  where
+    mergeTmpl (cw,ca,cdLsb,cdMsb,go,gt) = (cw,ca, resize (cdMsb ++# cdLsb),go,gt)
+    ins  = "ret" :> "stats" :> "retVld" :> Nil
+    outs = "codeWE" :> "codeAddr" :> "codeDataLsb" :> "codeDataMsb" :> "go" :> "gcThres" :> Nil
+    defOut = (False, 0 :: Index RomSize, unpack 0 :: BitVector 256, unpack 0 :: BitVector 256, False, 0 :: HeapAddr)
+
+topWithVIO
+  :: "clk" ::: Clock DomIn
+  -> "rst" ::: Reset DomIn
+  -> "dummy" ::: Signal DomIn () -- Dummy output
+topWithVIO clk rst = hwSeqX hOut (pure ())
+  where
+    en  = toEnable (pure True)
+    hIn = vioHeron clk hOut
+    hOut = topEntity clk rst en hIn
+
+{-# NOINLINE topWithVIO #-}
+makeTopEntity 'topWithVIO
 
 simDropCycles :: Int
 simDropCycles = 2 + (heapSize `div` 2)
@@ -326,7 +363,7 @@ testBench = done
   -- expected cycles (as type-level Nat), expected return atom,
   -- and it's compiled templates (as a Vec)
   (expCycles, expAtom, tmpls)
-            = $( do prog <- runIO $ getProjectFile "tests/benchmarks/fib.fl" >>= compileBenchmark
+            = $( do prog <- runIO $ getProjectFile "tests/benchmarks/adjoxo.fl" >>= compileBenchmark
                     let code = snd (encProg prog)
                     tmplsVec <- listToVecTH code
                     (emuRet, emuCycles) <- runIO (runEmulator prog)
@@ -352,8 +389,8 @@ testBench = done
   go = stimuliGenerator clkIn rstIn (snd testInput)
   gcThres = pure defGcThreshold
 
-  done = withClockResetEnable clkIn rstIn enIn assertReturn expCycles expAtom $
-         topEntity clkIn rstIn enIn tmplWe tmplAddr tmplBits go gcThres
+  done = withClockResetEnable clkIn rstIn enIn assertReturn expCycles expAtom .
+         unbundle . topEntity clkIn rstIn enIn $ bundle (tmplWe, tmplAddr, tmplBits, go, gcThres)
 
   enIn           = enableGen  @DomIn
   clkIn          = tbClockGen @DomIn (fmap not done)

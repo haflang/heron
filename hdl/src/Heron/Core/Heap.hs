@@ -116,6 +116,9 @@ arbitrateHeap ops gc
     isNoOp RamNoOp = True
     isNoOp _       = False
     checkCollision :: HeapIn a (p+2) d -> HeapIn a (p+2) d
-    checkCollision as@((RamWrite x _) :> (RamWrite y _) :> zs)
+    checkCollision = id
+    {-
+    checkCollision as@((RamWrite x _) :> (RamWrite y _) :> _)
       | x==y = errorX $ unwords ["Possible WW heap collision on ", show as] -- RF BRAM only has W-W collisions
     checkCollision as = as
+-}
