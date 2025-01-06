@@ -32,7 +32,7 @@ echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 ```
 
 To build images for any of the FPGA targets, you'll also need to install Vivado
-ensure it's available from your `$PATH` environment. This repo expects [Vivado
+and ensure it's available from your `$PATH` environment. This repo expects [Vivado
 2023.1](https://www.xilinx.com/support/download/index.html/content/xilinx/en/downloadNav/vivado-design-tools/archive.html),
 but other versions should work with minor modification.
 
@@ -51,7 +51,7 @@ There are a few utility packages for Heron's source language and emulation.
 `.#flite` target
 : The F-lite compiler --- a translator from the high-level source language,
   [F-lite](https://hackage.haskell.org/package/flite), to Heron graph templates.
-  Example: `flite -r6:4:2:1:2:16 -h3 -i1 -p -s flite/examples/large/adjoxo.fl`
+  Example: `flite -r6:4:2:1:2:16 -h3 -i1 -s -p flite/examples/large/adjoxo.fl`
   will compile the `adjoxo` benchmark to human readable(ish) templates using the
   default Heron configuration. See `flite -h` for options.
 
@@ -60,12 +60,12 @@ There are a few utility packages for Heron's source language and emulation.
   cycle-accurate simulation of Heron's mutator (but the GC behaviour is
   different). Example: with both `.#flite` and `.#heron-emu` available (e.g.
   after `nix shell .#flite .#heron-emu`), you can compile and emulate the
-  `adjoxo` benchmark with `flite -r6:4:2:1:2:16 -h3 -i1 -p -s
+  `adjoxo` benchmark with `flite -r6:4:2:1:2:16 -h3 -i1 -s
   flite/examples/large/adjoxo.fl | emu -n4 -v -`. See `emu -h` for options.
 
 ### Hardware design
 
-The
+The main hardware description for Heron.
 
 `.#heron-clash` target
 : Heron's hardware description written in Clash. The build process generates a
@@ -73,7 +73,7 @@ The
   board-specific `heron-{alveo,ultra96,pynqz2-vio}` targets. It also supplies a
   `heron` binary which can be used to simulate the design or generate binary
   template files. Example: generate a binary file for the `adjoxo` benchmark
-  with `heron -d flite/examples/large/adjoxo.fl > ./adjoxo.bin`. See `heron -h`
+  with `heron -d flite/examples/large/adjoxo.fl > /tmp/adjoxo.bin`. See `heron -h`
   for options.
 
 `.#heron-verilated` target
@@ -92,10 +92,10 @@ Vivado (usually installed without nix) you need to pass some extra commands when
 building: e.g. `nix build .#heron-pynqz2-vio --impure --no-sandbox`.
 
 I've had some issues with Ubuntu 24.04's apparmor configuration causing `bwrap`
-errors when building these targets. A sledgehammer approach to avoid this is to
-temporarily disable it via `sudo sysctl -w
-kernel.apparmor_restrict_unprivileged_userns=0` (obviously very dangerous, but
-it work).
+errors (`bwrap: setting up uid map: Permission denied`) when building these
+targets. A sledgehammer approach to avoid this is to temporarily disable it via
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (obviously very
+dangerous, but it works).
 
 `.#pynqz2-vio` target
 : An implementation for the [PYNQ-Z2
@@ -107,8 +107,9 @@ it work).
   can interact with the Heron processor over JTAG. The vio scripts expect the
   [cable drivers
   installed](https://digilent.com/reference/programmable-logic/guides/install-cable-drivers)
-  to be installed, a PYNQ-Z2 board to be plugged in an fully booted. Example:
-  you can send a program to the Heron processor with `heron -d
+  to be installed, a PYNQ-Z2 board to be plugged in via USB, and the board has
+  been fully booted (LEDs 0--5 should flash when this happens). Example: you can
+  send a program to the Heron processor with `heron -d
   flite/examples/large/adjoxo.fl > /tmp/adjoxo.bin; run-vio /tmp/adjoxo.bin`.
   This will load the bitstream onto the FPGA, send the template binary through
   the VIO core, and report the results.
