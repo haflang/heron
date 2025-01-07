@@ -96,8 +96,7 @@ heronPE PEIn{..} = (PEOut {..}, debug)
                    , bundle GCIn{..} , bundle GCOut{..}
                    )
     (_peStats, _peResult) = unbundle result
-    result = let capture = (isJust .snd <$> _result) .||. (isJust <$> peGo)
-             in regEn (unpack 0) capture _result
+    result = regEn (unpack 0) goLatch _result
 
     -- Memory structure primitives
     uStkRam    = blockRam1 ClearOnReset (SNat @UStkSize) Nothing
@@ -129,14 +128,14 @@ heronPE PEIn{..} = (PEOut {..}, debug)
     tmplOut' = bundle $ (RamRead <$> _tmplOut) :> peCode :> Nil
 
     -- Additional mutator inputs
+    goLatch = (isJust <$> peGo) .||. (isJust . snd) <$> _result
+    begin  = let rootAtom = fmap (flip (Fun 0) True) <$> peGo
+             in  regEn Nothing goLatch rootAtom
     gcCmd     = register NoCmd   _cmd
     nextAddrs = zipWith3 resolveNext
                   <$> fmap read gcMemIn
                   <*> register (repeat (Nothing,Nothing)) _nextFree
                   <*> fmap allocd request
-    begin  = let rootAtom = fmap (flip (Fun 0) True) <$> peGo
-                 capture  = (isJust <$> peGo) .||. (isJust . snd) <$> _result
-             in  regEn Nothing capture rootAtom
 
     -- Additional collector inputs
     heapMemIn = mux (register False gcAccess)
@@ -203,7 +202,8 @@ topEntity clkIn rstIn enIn ins = reg defOut $ bundle
   , isJust <$> _peResult peOut
   )
   where
-    (cWe, cAddr, cData, go, gcThres) = unbundle ins
+    (cWe, cAddr, cData, go, gcThres) = unbundle $ reg defIns ins
+    defIns = (False, 0, unpack 0, False, 0)
     reg :: NFDataX a => a -> Signal DomIn a -> Signal DomIn a
     reg d x = withClockResetEnable @DomIn clkIn rstIn enIn $ register d x
 
@@ -213,7 +213,7 @@ topEntity clkIn rstIn enIn ins = reg defOut $ bundle
     cWe'     = reg False cWe
     cAddr'   = reg 0 cAddr
     cData'   = reg 0 cData
-    go'      = reg False go
+    go'      = withClockResetEnable @DomIn clkIn rstIn enIn (isRising False) $ reg False go
     gcThres' = reg 0 gcThres
 
     -- Transform to a `PEIn` record
@@ -239,7 +239,7 @@ vioHeron clk = fmap mergeTmpl . vioProbe @DomIn ins outs defOut clk
     mergeTmpl (cw,ca,cdLsb,cdMsb,go,gt) = (cw,ca, resize (cdMsb ++# cdLsb),go,gt)
     ins  = "ret" :> "stats" :> "retVld" :> Nil
     outs = "codeWE" :> "codeAddr" :> "codeDataLsb" :> "codeDataMsb" :> "go" :> "gcThres" :> Nil
-    defOut = (False, 0 :: Index RomSize, unpack 0 :: BitVector 256, unpack 0 :: BitVector 256, False, 0 :: HeapAddr)
+    defOut  = (False, 0 :: Index RomSize, unpack 0 :: BitVector 256, unpack 0 :: BitVector 256, False, 0 :: HeapAddr)
 
 topWithVIO
   :: "clk" ::: Clock DomIn

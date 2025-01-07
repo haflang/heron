@@ -36,9 +36,8 @@ proc vioWriteTemplates {fname} {
       }
 
       # Pack templates into two 256-bit words
-      set padLen [expr 512-[string length $tmpl]]
-      set msb "[string repeat "0" $padLen][string range $tmpl 0   end-256]"
-      set lsb [string range $tmpl end-255 end]
+      set msb [format {%0*s} 256 [string range $tmpl 0   end-256]]
+      set lsb [format {%0*s} 256 [string range $tmpl end-255 end]]
       set addr_string [format {%0*s} [get_property PROBE_PORT_BIT_COUNT [get_hw_probes */codeAddr]] $tmpl_addr]
       incr tmpl_addr
 
@@ -50,12 +49,16 @@ proc vioWriteTemplates {fname} {
       commit_hw_vio [get_hw_probes "*/codeDataLsb */codeDataMsb */codeWE */codeAddr "]
   }
 
-  # Go!
-  set gcThres [expr {1 << [get_property PROBE_PORT_BIT_COUNT [get_hw_probes */gcThres]]-2}]
+  # End template writing
+  set gcThres [expr {1 << [get_property PROBE_PORT_BIT_COUNT [get_hw_probes */gcThres]]-3}]
   set_property OUTPUT_VALUE $gcThres [get_hw_probes */gcThres]
   set_property OUTPUT_VALUE 0 [get_hw_probes */codeWE]
+  commit_hw_vio [get_hw_probes "*/codeWE */gcThres"]
+  after 5000
+
+  # Go!
   set_property OUTPUT_VALUE 1 [get_hw_probes */go]
-  commit_hw_vio [get_hw_probes "*/codeWE */gcThres */go"]
+  commit_hw_vio [get_hw_probes "*/go"]
 
   # Lower the go flag
   set_property OUTPUT_VALUE 0 [get_hw_probes */go]

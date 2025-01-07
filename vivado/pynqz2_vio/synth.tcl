@@ -31,7 +31,7 @@ set_property -dict [list \
 ] [get_ips zynq_ps]
 
 # Synthesise
-launch_runs impl_1 -jobs 2
+launch_runs impl_1 -jobs 3
 wait_on_run impl_1
 
 # Report
@@ -56,7 +56,7 @@ if {$timing_met == 0} {
 puts "Timing constraints are met."
 
 # Generate PYNQ files
-launch_runs impl_1 -to_step write_bitstream -jobs 3
+launch_runs impl_1 -to_step write_bitstream -jobs 1
 wait_on_run impl_1
 exec cp ./prj.runs/impl_1/wrapper.bit heron_pynqz2_vio.bit
 exec cp ./prj.runs/impl_1/wrapper.ltx heron_pynqz2_vio.ltx

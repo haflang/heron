@@ -109,7 +109,7 @@ void report(VtopEntity *top) {
   if (ret == ERR_HEAP_FULL)
     cout << "Failed with ERR_HEAP_FULL" << endl;
   else
-    cout << "Returned " << (ret >> 3 & 0x7FFF) << endl;
+    cout << "Returned " << (ret & 0x7FFF) << endl;
 
   cout << "Mutator cycles = "          << mutCycles    << endl
        << "GC root id cycles = "       << gcRootCycles << endl
