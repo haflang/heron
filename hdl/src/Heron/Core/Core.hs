@@ -511,14 +511,18 @@ update CPUIn{..} = case read uStkIn of
             n2 = App True (resize $ nfArity + 1 - nodeLen)
                      (Just (Ptr PShared n1Addr) :> n2Args)
         gcRequest .:= RAlloc (True :> repeat False)
-        specialiseHeap heapConfig
-          -- UltraRAM
-          (wideUpd .= (n1Addr, n1)   >>
-           phase   .= ContinueUpdate >>
-           heapOut .:= RamRead ua :> RamWrite ua n2 :> repeat RamNoOp)
-          -- BlockRAM
-          (when finish (phase .= Halt) >>
-           heapOut .:= RamWrite ua n2 :> RamWrite n1Addr n1 :> repeat RamNoOp)
+        if gcCmd == UpdateBarrierCmd
+          then specialiseHeap heapConfig
+            -- UltraRAM
+            (wideUpd .= (n1Addr, n1)   >>
+             phase   .= ContinueUpdate >>
+             heapOut .:= RamRead ua :> RamWrite ua n2 :> repeat RamNoOp)
+            -- BlockRAM
+            (when finish (phase .= Halt) >>
+             heapOut .:= RamWrite ua n2 :> RamWrite n1Addr n1 :> repeat RamNoOp)
+          else
+            when finish (phase .= Halt) >>
+            heapOut .:= RamWrite ua n2 :> RamWrite n1Addr n1 :> repeat RamNoOp
         updateAddr .:= Just ua
   where
     nodeLen = snatToNum (SNat @NodeLen)
