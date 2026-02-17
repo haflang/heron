@@ -12,6 +12,9 @@ module Heron.Core.Fifo
  , FIn
  , FOut (..)
  , Fifo
+ , -- * Helpers
+   notFull
+ , notAlmostFull
  ) where
 
 import           Clash.Prelude
@@ -35,11 +38,21 @@ data FOut a d
   , _next :: Maybe a   -- ^ Current head element of the fifo
   } deriving (Show, Generic, NFDataX, ShowX)
 
+deriving instance (KnownNat d, 1<=d, BitPack a) => BitPack (FOut a d)
+
 instance SizedRead (FOut a d) where
   type SizedAddr (FOut a d) = RamAddr d
   type SizedData (FOut a d) = Maybe a
   size (FOut sz _) = sz
+  {-# INLINE size #-}
   read (FOut _  x) = x
+  {-# INLINE read #-}
+
+notFull :: (KnownNat d, 1<=d) => FOut a d -> Bool
+notFull = (< maxBound) . _size
+
+notAlmostFull :: (KnownNat d, 1<=d) => FOut a d -> Bool
+notAlmostFull = (< maxBound-1) . _size
 
 -- | A fifo contains elements of type @a@ with a depth of @d@ elements
 type Fifo dom a d = Signal dom (FIn a) -> Signal dom (FOut a d)
@@ -64,8 +77,8 @@ newFifo initWrp ramPrim inps = FOut <$> sz <*> top
     (mpush, pop) = unbundle inps
 
     -- Stack size tracking
-    rdp  = delay (0 :: RamAddr d) rdp'
-    wrp  = delay initWrp          wrp'
+    rdp  = register (0 :: RamAddr d) rdp'
+    wrp  = register initWrp          wrp'
     rdp' = mux (pop .&&. sz ./=. 0) (rdp + 1) rdp
     wrp' = mux (isJust <$> mpush) (wrp + 1) wrp
     sz   = wrp - rdp
@@ -74,4 +87,4 @@ newFifo initWrp ramPrim inps = FOut <$> sz <*> top
     ramWrite = liftA2 (\x y -> fmap (const (y, x)) x) mpush wrp
 
     -- Gather RAM outputs
-    top = readNew ramPrim rdp' ramWrite
+    top = mux (sz .>. 0) (readNew ramPrim rdp' ramWrite) (pure Nothing)

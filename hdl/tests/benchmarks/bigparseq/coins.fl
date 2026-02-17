@@ -1,0 +1,70 @@
+data AList a = ANil | ASing a | Append (AList a) (AList a)
+
+-- lenA :: AList a -> Int
+lenA ANil          = 0
+lenA (ASing x)     = 1
+lenA (Append l r)  = lenA l + lenA r
+
+lenAPar depth ANil = 0
+lenAPar depth (ASing x) = 1
+lenAPar depth (Append l r)  =
+  if depth == 0
+    then lenA l + lenA r
+    else let depth' = depth-1
+             llen = lenAPar depth' l
+             rlen = lenAPar depth' r
+         in rlen `par` llen + rlen
+
+nilA ANil = True
+nilA (ASing x) = False
+nilA (Append l r) = False
+
+append l r =
+  if nilA l
+    then r
+    else if nilA r
+           then l
+           else Append l r
+
+-- pay :: Int -> [(Int,Int)] -> [Int] -> AList [Int]
+pay val coins0 acc =
+  if val == 0
+    then ASing acc
+    else case coins0 of
+      [] -> ANil
+      (x:coins) -> case x of
+        (c,q) -> if c > val
+                   then pay val coins acc
+                   else let left = pay (val-c) coins' (c:acc)
+                            right = pay val coins acc
+                            coins' = if q == 1 then coins
+                                               else (c,q-1) : coins
+                        in append left right
+
+-- payPar :: Int -> Int -> [(Int,Int)] -> [Int] -> AList [Int]
+payPar depth val coins0 acc =
+  if depth == 0
+    then pay val coins0 acc
+    else if val == 0
+      then ASing acc
+      else case coins0 of
+        [] -> ANil
+        (x:coins) -> case x of
+          (c,q) -> if c > val
+                     then payPar depth val coins acc
+                     else let left = payPar (if q==1 then depth-1 else depth) (val-c) coins' (c:acc)
+                              right = payPar (depth-1) val coins acc
+                              coins' = if q == 1 then coins
+                                                 else (c,q-1) : coins
+                          in runEval $ liftEval2 append (rpar left) (rseq right)
+
+liftEval2 f (Done x) sy = case sy of
+  Done y -> Done (f x y)
+
+parDepth = 4
+main =
+  let arg = 413
+      vals = [250, 100, 25, 10, 5, 1]
+      quants = [4,5,4,7,9,9]
+      coins = zip vals quants
+  in lenA $ pay arg coins []

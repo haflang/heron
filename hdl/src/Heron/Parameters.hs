@@ -7,37 +7,52 @@
 
 module Heron.Parameters
   (
-  -- * Template Dimensions
+  -- * User settings
+  -- ** Template Dimensions
     MaxAps
   , MaxPush
   , NodeLen
-  , CMaxPush
-  , Log2MaxPush
   , MaxRegs
   , MaxApSpan
   , MaxFnAps
 
-  -- * Memory Depths
+  -- ** Memory Depths
   , VStkSize
   , AStkSize
   , UStkSize
   , PStkSize
   , HeapSize
-  , GCMutBufSize
   , RomSize
+  , GCMutBufSize
+  , PortBufSize
 
-  -- * Field Widths
+  -- ** Field Widths
   , TagW
   , IntW
   , ShortTagW
   , ShortIntW
   , MaxArgs
+  , RefCountW
 
-  -- * Non-functional circuit properties
+  -- ** Non-functional circuit properties
   , ClkT
   , KnownHeapArch
   , specialiseHeap
   , heapConfig
+
+  -- ** Multicore settings
+  , MeshCols
+  , MeshRows
+  , Meshes
+
+  -- * Derived settings
+  -- ** Stack config
+  , CMaxPush
+  , Log2MaxPush
+  , MaxPECols
+  , MaxPERows
+  , HopCount
+  , MaxCores
   ) where
 
 import           Clash.Prelude
@@ -48,14 +63,6 @@ type MaxAps = 2
 type NodeLen = 4
 -- | Maximum length for template's spinal application
 type MaxPush = 6
-
--- | Synonym for \( \lceil\log_2 \mathtt{MaxPush} \rceil \), used in efficient power-of-two
---   parallel stack implementation
-type Log2MaxPush = CLog 2 MaxPush
-
--- | Synonym for \( 2^{\lceil\log_2 \mathtt{MaxPush} \rceil} \), used for efficient power-of-two
---   parallel stack implementation
-type CMaxPush    = 2 ^ Log2MaxPush
 
 -- | Maximum number of primitive registers per core
 type MaxRegs = 2
@@ -72,14 +79,15 @@ type UStkSize = 4096
 -- | Depth of /p/pdate stack
 type PStkSize = 1024
 -- | Depth of heap memory
-type HeapSize = 12*1024
+type HeapSize = 8*1024
+  -- ^ Reduced to 8k so we can fit atoms in 18-bit BRAMs with new `PtrTag`s
 -- | Size of the GC's Mutation Buffer for handling updates
-type GCMutBufSize = 8
+type GCMutBufSize = 16
 -- | Depth of template memory
 type RomSize = 1024
 -- | Maximum applications across split templates. Informs how many addresses we
 -- reserve on the free list before counting the heap as dangerously full
-type MaxFnAps = 32*2
+type MaxFnAps = 60 --90
 
 ---- Field widths
 -- | Constructor tag width
@@ -92,11 +100,24 @@ type ShortIntW = 6
 type ShortTagW = 2
 -- | Maximum arity for any template
 type MaxArgs = 7
+-- | Reference Counts
+type RefCountW = 15
 
--- Circuit's non-functional properties
+-- | Number of Heron cores
+type MeshCols = 2
+type MeshRows = 4
+type Meshes   = 1
+type PortBufSize = 16
+
+type MaxPERows = MeshRows * Meshes
+type MaxPECols = MeshCols
+type HopCount = MaxPERows + MaxPECols - 2
+type MaxCores  = MaxPERows * MaxPECols
+
+-- * Circuit's non-functional properties
 
 -- | Target clock period in picoseconds
-type ClkT = 5405
+type ClkT = 10000 -- 100 MHz -- 5882 -- 170 MHz
 
 data MemoryArch = UltraRAM | BlockRAM
 data HeapArch (a :: MemoryArch) = MkHeapArch
@@ -129,3 +150,13 @@ instance KnownHeapArch (HeapArch 'BlockRAM) where
 -- | Heap memory architecture
 heapConfig :: HeapArch 'UltraRAM
 heapConfig  = MkHeapArch
+
+-- * Derived settings
+
+-- | Synonym for \( \lceil\log_2 \mathtt{MaxPush} \rceil \), used in efficient power-of-two
+--   parallel stack implementation
+type Log2MaxPush = CLog 2 MaxPush
+
+-- | Synonym for \( 2^{\lceil\log_2 \mathtt{MaxPush} \rceil} \), used for efficient power-of-two
+--   parallel stack implementation
+type CMaxPush    = 2 ^ Log2MaxPush

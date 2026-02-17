@@ -4,6 +4,7 @@ import           Clash.Hedgehog.Sized.Vector
 import qualified Clash.Prelude                as C
 import           Data.List                    (intersect, mapAccumL, nub)
 import           Data.Maybe                   (catMaybes)
+import           Data.Tuple                   (swap)
 import           Prelude                      hiding (read)
 
 import           Test.Tasty
@@ -76,21 +77,64 @@ updateAt n x xs = pre ++ [x] ++ post
 
 -- This implementation follows the double pumped architecture of the UltraRAM
 -- blocks. All actions on port A are committed before the actions on port B.
+-- Read port remains latched during write operations
 golden :: forall d p a .
           (C.KnownNat d
-          ,C.KnownNat p)
+          ,C.KnownNat p
+          ,1<=p)
        => [C.Vec p (C.RamOp d a)]
        -> [C.Vec p (Maybe a)]
-golden ins = snd $ mapAccumL go (replicate d' Nothing) ins
+golden ins = snd $ mapAccumL go (replicate d' Nothing, C.repeat @p Nothing) ins
   where
-    doOp hp (C.RamNoOp)         = (hp, Nothing)
-    doOp hp (C.RamRead addr)    = (hp, hp !! fromIntegral addr)
-    doOp hp (C.RamWrite addr x) = (updateAt (fromIntegral addr) (Just x) hp
-                                  ,Just x
-                                  )
-    go hp ops = let (hp', news) = C.mapAccumL doOp hp ops
-                in (hp', news)
-    d' = C.snatToNum (C.SNat @d)
+    doOp (hp, prevs) (C.RamNoOp) =
+      ( (hp, C.rotateLeft prevs 1)
+      , C.head prevs
+      )
+    doOp (hp, prevs) (C.RamRead addr) =
+      let rd = hp !! fromIntegral addr
+      in ( (hp, prevs C.<<+ rd)
+         , rd
+         )
+    doOp (hp, prevs) (C.RamWrite addr x) =
+      let hp' = updateAt (fromIntegral addr) (Just x) hp
+      in ( (hp',C.rotateLeft prevs 1)
+         , C.head prevs
+         )
+
+    go :: ([Maybe a], C.Vec p (Maybe a)) -> C.Vec p (C.RamOp d a)
+       -> (([Maybe a], C.Vec p (Maybe a)), C.Vec p (Maybe a))
+    go hp ops = C.leToPlus @1 @p $ C.mapAccumL doOp hp ops
+
+    d' = C.snatToNum $ C.SNat @d
+
+simHeap
+  :: forall d p a .
+     (C.KnownNat d, C.KnownNat p, 1<=d, p<=2, C.NFDataX a)
+  => [C.Vec p (C.RamOp d a)]
+  -> [C.Vec p (Maybe a)]
+simHeap inps =
+  let inps' = inps ++ repeat (C.repeat C.RamNoOp)
+  in map (C.map C.maybeIsX) .
+     take (length inps) $
+     drop 1 $
+     C.simulate @C.System
+       (fmap read . newHeap (dpRam UltraRam)) inps'
+
+prop_HeapConflicts = H.property $ do
+  let inp :: [C.Vec 2 (C.RamOp 5 Int)]
+          =  [ C.RamWrite 0 42 C.:> C.RamWrite 1 33 C.:> C.Nil
+             , C.RamRead  1    C.:> C.RamWrite 1 99 C.:> C.Nil -- R/W -> old data
+             , C.RamWrite 0 49 C.:> C.RamRead  0    C.:> C.Nil -- W/R -> new data
+             , C.RamWrite 2 22 C.:> C.RamWrite 2 11 C.:> C.Nil -- W/W -> port  B data comitted
+             , C.RamRead  2    C.:> C.RamNoOp       C.:> C.Nil -- NoOp -> old data
+             ]
+      ans =  [ Nothing C.:> Nothing C.:> C.Nil
+             , Just 33 C.:> Nothing C.:> C.Nil
+             , Just 33 C.:> Just 49 C.:> C.Nil
+             , Just 33 C.:> Just 49 C.:> C.Nil
+             , Just 11 C.:> Just 49 C.:> C.Nil
+             ]
+  simHeap inp === ans
 
 prop_HeapGolden :: H.Property
 prop_HeapGolden = H.withTests 1000 $
@@ -112,20 +156,13 @@ prop_HeapGolden = H.withTests 1000 $
             SomeNat (_ :: n p) -> do
               case C.compareSNat (C.SNat @p) C.d2 of
                 C.SNatGT -> error "Generated input for more than 2 ports"
-                C.SNatLE -> do
-
-                  -- Simulate
-                  inps <- H.forAll $ genOpVecs @d @p (Range.linear 1 500)
-                                                     (Gen.alpha)
-                  let inps' = inps ++ repeat (C.repeat C.RamNoOp)
-                  let want  = golden inps
-                  let got   = map (C.map C.maybeIsX) .
-                              take (length inps) $
-                              drop 1 $
-                              (C.simulate @C.System
-                                 (fmap read . newHeap (dpRam UltraRam))
-                                 inps')
-                  got === want
+                C.SNatLE -> case C.compareSNat C.d1 (C.SNat @p) of
+                  C.SNatGT -> error "Generated input for less than 1 port"
+                  C.SNatLE -> do
+                    -- Simulate
+                    inps <- H.forAll $ genOpVecs @d @p (Range.linear 1 500)
+                                                       (Gen.alpha)
+                    simHeap inps === golden inps
 
 tests :: TestTree
 tests = $(testGroupGenerator)

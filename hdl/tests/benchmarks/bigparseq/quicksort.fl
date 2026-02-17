@@ -1,0 +1,115 @@
+lte x y = x <= y
+gt x y = not (x <= y)
+
+quicksortPar n xs =
+  if n == 0
+    then quicksort xs
+    else case xs of
+      [] -> []
+      (pivot:rest) ->
+        let low  = quicksortPar (n-1) (filter (gt pivot) rest)
+            high = quicksortPar (n-1) (filter (lte pivot) rest) `using` evalList rseq
+        in high `par` low ++ [pivot] ++ high
+
+quicksort [] = []
+quicksort (pivot:rest) = case rest of
+  [] -> [pivot]
+  (y:ys) -> let low  = quicksort $ filter (gt pivot) rest
+                high = quicksort $ filter (lte pivot) rest
+            in low ++ [pivot] ++ high
+
+-- Version with ideal input
+-- Each sublist should be equal size
+
+interleave xs ys =
+  if null xs
+    then ys
+    else if null ys
+            then xs
+            else head xs : interleave ys (tail xs)
+
+inps l u =
+  let mid = (((u-l)+1) `div` 2) + l
+      ls  = inps l (mid-1)
+      us  = inps (mid+1) u
+  in mid : interleave ls us
+genInps n = take n $ inps 0 n
+
+threshold = 3
+main =
+  let
+      largeInp = genInps 800 `using` evalList rseq -- 1000
+      sorted = quicksort largeInp -- Par threshold largeInp
+  in maximum sorted
+
+{-
+
+-- Version that riffle shuffles the input
+
+rep n xs = if n == 0 then []
+                     else xs ++ rep (n-1) xs
+
+randomise = shuffle 2
+
+shuffle n xs =
+  if n == 0
+    then xs
+    else shuffle (n-1) (riffle xs)
+
+riffle [] = []
+riffle (x0:xs0) =
+  let xs = x0:xs0
+  in case splitAt ((length xs) `div` 2) xs of
+       (ys, zs) -> interleave ys zs
+
+interleave xs ys =
+  if null xs
+    then ys
+    else if null ys
+            then xs
+            else head xs : interleave ys (tail xs)
+
+-- This is a bad implementation of splitAt. The first list is reversed, but that's OK here.
+splitAt n xs = splitAt' [] n xs
+splitAt' acc n [] = (acc, [])
+splitAt' acc n (x:xs) =
+  if n == 0
+    then (acc, x:xs)
+    else splitAt' (x:acc) (n-1) xs
+
+threshold = 5
+main =
+  let
+      largeInp = randomise (enumFromTo 0 1200) -- `using` evalList r0
+      sorted = quicksortPar threshold largeInp
+  in maximum sorted
+-}
+
+{-
+
+-- Version with hard-coded input
+
+threshold = 4
+main =
+  let inp = [1024,     625,     278,    1916,     437,    1281,     229,    1182,
+             1846,    1620,     227,      88,    1019,    1967,      14,    2039,
+             1499,    1845,    1689,    1162,    1180,     486,     129,     799,
+             1985,     311,     711,    1840,    1978,    1420,    1547,     644,
+              164,    1862,     277,    1691,    1351,     841,    1627,     972,
+              232,    1014,    1192,     539,     814,     775,    1171,     594,
+              755,     274,    1485,     846,    1341,    1059,    1424,     535,
+             1075,     336,     296,     798,     675,    1722,    1347,     335,
+             1066,    1822,     887,    2022,    1272,     662,     746,     810,
+              207,     526,     192,     468,    1403,    1266,      34,    1623,
+             1996,    1068,     528,    1909,    1788,    1612,     583,     263,
+             1373,    1278,    1466,    1077,    1223,    1158,    1827,     421,
+             1408,    1111,     127,     937,    1699,    1776,     220,     223,
+             1270,    1736,     710,    1960,    1085,    1009,    1032,     677,
+             1265,    1929,      64,    1219,     619,     175,    1309,     340,
+              771,     519,     212,    1144,     440,    1211,    1312,    1501,
+              872,    1732,    1153,    1538,    1949,     196,     498,     301,
+             2043,     218,    1161,    1562,    1520,    2041,     604,      64]
+      largeInp = rep 8 inp `using` evalList r0
+      sorted = quicksortPar threshold largeInp
+  in maximum sorted
+-}

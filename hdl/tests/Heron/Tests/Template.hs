@@ -40,11 +40,19 @@ genAtom :: H.Gen Atom
 genAtom = Gen.choice
   [ Fun       <$> ge <*> ge <*> ge
   , PrimOp    <$> ge <*> ge <*> genOpCode
-  , Ptr       <$> ge <*> ge
+  , Ptr       <$> genPtrTag <*> ge
   , PrimInt   <$> ge
   , Con       <$> ge <*> ge
-  , Arg       <$> ge <*> ge
+  , Arg       <$> genPtrTag <*> ge
   , Reg       <$> ge <*> ge
+  ]
+
+genPtrTag :: H.Gen PtrTag
+genPtrTag = Gen.element
+  [ PUniq
+  , PShared
+  , PSeq
+  , PPar
   ]
 
 genAlt :: H.Gen Alt

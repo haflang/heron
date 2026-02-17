@@ -1,0 +1,72 @@
+\pgfplotsset{
+  gcLinePlot/.style={
+    title style={align=center}
+    , ylabel=Speedup
+    , xlabel={\#Cores}
+    , grid=both
+    , minor tick num=4
+    , grid style={line width=.1pt, draw=gray!10}
+    , major grid style={line width=.2pt,draw=gray!50}
+    , ymin=0
+    , ymax=24
+    , xmin=1
+    , xmax=24
+    , height=4cm
+    , width=8cm
+    , penciline={jag ratio=1}
+    , cycle list/Accent
+    , cycle multiindex* list={
+        mark list*\nextlist
+        Accent\nextlist
+    },
+  },
+}
+
+\begin{tikzpicture}
+
+% Siege Results
+\begin{scope}
+  \begin{axis}[
+      gcLinePlot
+      , title={Siege}
+    ]
+    \foreach \B in {Coins,Minimax,Mss,Queens,SumEuler,Tak,TransClos,TreeSum}{
+      \pgfplotstableread[col sep=comma]{data/siege/summary_\B.csv}\datatable
+      \addplot+ [decoration={name=none}] table [x expr=\thisrow{cores}, y expr=\thisrow{speedup},col sep=comma] {\datatable};
+    }
+  \end{axis}
+\end{scope}
+
+% Dummy plot just to get a hacky shared legend
+\begin{scope}[yshift=-2.3cm,xshift=-1.5cm]
+  \begin{axis}[
+    gcLinePlot
+    , hide axis
+    , ymin=-2, ymax=-1
+    , height=6em
+    , legend columns=4
+    , legend style={draw=white!15!black,legend cell align=left,font=\scriptsize,at={(axis cs:18,0)},anchor=north}
+    ]
+    \foreach \B in {Coins,Minimax,Mss,Queens,SumEuler,Tak,TransClos,TreeSum}{
+       \pgfplotstableread[col sep=comma]{data/i7-1250U/summary_\B.csv}\datatable
+       \addplot+ [decoration={name=none}] table [x expr=\thisrow{cores}, y expr=\thisrow{speedup},col sep=comma] {\datatable};
+    }
+    \legend{Coins,Minimax,Mss,Queens,SumEuler,Tak,TransClos,TreeSum}
+  \end{axis}
+\end{scope}
+
+% i7 Results
+\begin{scope}[yshift=-5.6cm]
+  \begin{axis}[
+      gcLinePlot
+      , title={GHC + i7-1250U E-cores}
+      , ymax=8
+      , xmax=8
+    ]
+    \foreach \B in {Coins,Minimax,Mss,Queens,SumEuler,Tak,TransClos,TreeSum}{
+      \pgfplotstableread[col sep=comma]{data/i7-1250U/summary_\B.csv}\datatable
+      \addplot+ [decoration={name=none}] table [x expr=\thisrow{cores}, y expr=\thisrow{speedup},col sep=comma] {\datatable};
+    }
+  \end{axis}
+\end{scope}
+\end{tikzpicture}

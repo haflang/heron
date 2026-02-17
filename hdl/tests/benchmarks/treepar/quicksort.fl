@@ -1,0 +1,103 @@
+{-
+We sort a list, but generate a conclist/binary tree to avoid repeated concatenation
+-}
+
+--------------------------------------------------------------------------------
+-- Conc list functions
+
+data ConcList a = CNil | CElem a | Conc (ConcList a) (ConcList a)
+
+alt (Just x) y = Just x
+alt Nothing  y = y
+
+cnull CNil = True
+cnull (CElem x) = False
+cnull (Conc xs ys) = cnull xs && cnull ys
+
+celem CNil = False
+celem (CElem x) = True
+celem (Conc xs ys) = (celem xs && cnull ys) ||
+                     (celem ys && cnull xs)
+
+chead = fromJust . cmhead
+cmhead CNil         = Nothing
+cmhead (CElem x)    = Just x
+cmhead (Conc xs ys) = cmhead xs `alt` cmhead ys
+
+clast = fromJust . cmlast
+cmlast CNil         = Nothing
+cmlast (CElem x)    = Just x
+cmlast (Conc xs ys) = cmlast ys `alt` cmlast xs
+
+cdecomp = cmdecomp CNil
+cmdecomp a CNil         = Nothing
+cmdecomp a (CElem x)    = Just (x, a)
+cmdecomp a (Conc xs ys) = cmdecomp (Conc a ys) xs `alt` cmdecomp a ys
+
+cmap f CNil = CNil
+cmap f (CElem x) = CElem (f x)
+cmap f (Conc xs ys) = Conc (cmap f xs) (cmap f ys)
+
+cfilter p  CNil = CNil
+cfilter p (CElem x) = if p x then CElem x else CNil
+cfilter p (Conc xs ys) = cprune (cfilter p xs) (cfilter p ys)
+-- TODO Do we want to rebalance in the Conc case?
+
+cprune CNil r = r
+cprune (CElem a) r =
+  case r of
+    CNil -> CElem a
+    CElem b -> Conc (CElem a) (CElem b)
+    Conc b c -> Conc (CElem a) (Conc b c)
+cprune (Conc x y) r =
+  case r of
+    CNil -> Conc x y
+    CElem b -> Conc (Conc x y) (CElem b)
+    Conc b c -> Conc (Conc x y) (Conc b c)
+
+cnil CNil = True
+cnil (CElem x) = False
+cnil (Conc x y) = cnil x && cnil y
+
+--------------------------------------------------------------------------------
+
+lte x y = x <= y
+gt x y = not (x <= y)
+
+quicksort [] = CNil
+quicksort (pivot:rest) = case rest of
+  [] -> CElem pivot
+  (x:xs) ->
+    let low  = quicksort $ filter (gt  pivot) rest
+        high = quicksort $ filter (lte pivot) rest
+    in forceConcList high `par` -- forceConcList low `seq`
+       Conc low (Conc (CElem pivot) high)
+
+forceConcList CNil = CNil
+forceConcList (CElem x) = x `seq` CElem x
+forceConcList (Conc xs ys) = let l = forceConcList xs
+                                 r = forceConcList ys
+                             in l `seq` r
+
+main =
+  let inp = [1024,     625,     278,    1916,     437,    1281,     229,    1182,
+             1846,    1620,     227,      88,    1019,    1967,      14,    2039,
+             1499,    1845,    1689,    1162,    1180,     486,     129,     799,
+             1985,     311,     711,    1840,    1978,    1420,    1547,     644,
+              164,    1862,     277,    1691,    1351,     841,    1627,     972,
+              232,    1014,    1192,     539,     814,     775,    1171,     594,
+              755,     274,    1485,     846,    1341,    1059,    1424,     535,
+             1075,     336,     296,     798,     675,    1722,    1347,     335,
+             1066,    1822,     887,    2022,    1272,     662,     746,     810,
+              207,     526,     192,     468,    1403,    1266,      34,    1623,
+             1996,    1068,     528,    1909,    1788,    1612,     583,     263,
+             1373,    1278,    1466,    1077,    1223,    1158,    1827,     421,
+             1408,    1111,     127,     937,    1699,    1776,     220,     223,
+             1270,    1736,     710,    1960,    1085,    1009,    1032,     677,
+             1265,    1929,      64,    1219,     619,     175,    1309,     340,
+              771,     519,     212,    1144,     440,    1211,    1312,    1501,
+              872,    1732,    1153,    1538,    1949,     196,     498,     301,
+             2043,     218,    1161,    1562,    1520,    2041,     604,      64]
+      sorted = quicksort inp
+  in forceConcList sorted `seq`
+     chead sorted

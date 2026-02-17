@@ -1,0 +1,85 @@
+ \begin{tikzpicture}
+   [penciline={jag ratio=1}
+   ,lbl/.style=
+     { minimum width=2.4cm
+     , text width=2.4cm
+     , align=center
+     }
+   ,code/.style=
+     { minimum width=2.3cm
+     , text width=2.3cm
+     , align=left
+     , rect crayon fill={LightBlue!30, opacity=0.9, line width=3mm}
+     , draw
+     , -
+     , decorate
+     }
+   ,blk/.style=
+     { lbl
+     , rectangle
+     , minimum height=5cm
+     }
+   ]
+
+ % RAM structre
+ \node [blk, rect crayon fill={LightBlue, line width=2mm}] (ram) {};
+ \node [lbl, below=0.2cm of ram.north, anchor=north] (ramlbl) {RAM\\(read-first mode)};
+
+ % Show transparent RAM words
+ \node [below=0.1cm of ramlbl] (ramwordstart) {};
+ \foreach \x in {0,0.25,0.5,0.75}{
+   \node [lbl, rect crayon fill = {Orange, opacity=0.5}, minimum height=0.6cm, minimum width=1.5cm, text width=1.5cm, anchor=north] (word) at ($(ramwordstart)!\x!(ram.south)$) {};
+   % \node [lbl, rect crayon fill = {Orange, opacity=0.5}, minimum height=0.6cm, minimum width=1cm, text width=1cm, anchor=north,xshift=-0.3cm] (word) at ($(ramwordstart)!\x!(ram.south)$) {};
+   % \node [lbl, right=0.15cm of word, rect crayon fill = {Orange, opacity=0.5}, minimum height=0.6cm, minimum width=0.3cm, text width=0.3cm] (wordtag) {};
+   \draw[decorate, opacity=0.7] ($(word.north east)+(0,0.13)$) -- ($(word.north west)+(0,0.13)$);
+ }
+ % One annotated word
+ \node [lbl, rect crayon fill = {Orange!60}, minimum height=0.6cm, minimum width=1.5cm, text width=1.5cm, anchor=north] (word) at ($(ramwordstart)!0.5!(ram.south)$) {GC Node};
+ % \node [lbl, rect crayon fill = {Orange}, minimum height=0.6cm, minimum width=1cm, text width=1cm, anchor=north,xshift=-0.3cm] (word) at ($(ramwordstart)!0.5!(ram.south)$) {Heap Addr};
+ % \node [lbl, right=0.15cm of word, rect crayon fill = {Orange}, minimum height=0.6cm, minimum width=0.3cm, text width=0.3cm] (wordtag) {Tag};
+
+ % Control logic
+ \node [blk,left=of ram, rect crayon fill={Orange!60, line width=2mm}] (control) {Control Logic};
+ \draw [<->, decorate] ($(control.east)+(0,0.5cm)$) -- node[above] {A} ($(ram.west)+(0,0.5cm)$) ;
+ \draw [<->, decorate] ($(control.east)-(0,0.5cm)$) -- node[below] {B} ($(ram.west)-(0,0.5cm)$) ;
+
+ % Groups
+ % Memory management
+ \foreach \x in {60,100}{
+    \node [draw=black!\x, penciline={jag ratio=2}, decorate, rectangle, fit={(ram) (control)}, inner sep=0.7cm] (cloaca) {};
+ }
+ \node[lbl, above=0.2cm of cloaca, font=\large, text width=4cm] {Memory Management};
+ % Reduction core
+ \foreach \x in {60,100}{
+    \node [draw=black!\x, penciline={jag ratio=2}, decorate, rectangle, minimum height=6.4cm, minimum width=2cm, left=3cm of cloaca] (heron) {};
+ }
+ \node[lbl, above=0.2cm of heron, font=\large] {Reduction Core};
+
+ \node[rectangle, minimum width=1.7cm, minimum height=0.6cm, rect crayon fill={Orange!60, line width=1.5mm}, yshift=2cm] (mux) at ($(heron.south east)!0.5!(cloaca.south west)$) {};
+ \node[draw, trapezium, trapezium angle=-45, decorate, yshift=2cm] (mux) at ($(heron.south east)!0.5!(cloaca.south west)$) {Arbitrator};
+
+ \node[draw=black!60, rectangle, decorate, anchor=south, minimum width=2cm, minimum height=1.3cm, rect crayon fill={LightBlue!60, line width=1.5mm}] (heap)  at ($(heron.south east)!0.5!(cloaca.south west)$) {};
+ \node[draw, rectangle, decorate, anchor=south, minimum width=2cm, minimum height=1.3cm, font=\large] (heap)  at ($(heron.south east)!0.5!(cloaca.south west)$) {Heap};
+
+ \draw [<->, decorate] ($(mux.south)-(0.3cm,0)$) -- ($(heap.north)-(0.3cm,0)$);
+ \draw [<->, decorate] ($(mux.south)+(0.3cm,0)$) -- ($(heap.north)+(0.3cm,0)$);
+ \draw [<->, decorate] (mux.north) -- ($(mux.north)+(0,0.3cm)$) -- ($(mux.north)+(-1.5cm,0.3cm)$);
+ \draw [<-, decorate] ($(mux.north)+(-0.3cm,0)$) -- ($(mux.north)+(-0.3,0.3cm)$) -- ($(mux.north)+(-1.5cm,0.3cm)$);
+ \draw [<->, decorate] ($(mux.north)+(0.3cm,0)$) -- ($(mux.north)+(0.3,0.3cm)$) -- ($(mux.north)+(1.5cm,0.3cm)$);
+
+ \draw[->, decorate] (cloaca.west) -- node[above,pos=0.33,font=\small] {Next frees} (heron.east);
+ \node[draw, rectangle, decorate, minimum width=0.6cm, minimum height=0.6cm, rect crayon fill={LightBlue!60, line width=1.5mm}, anchor=west] (raddrs) at ($(cloaca.west)!0.9!(heron.east)$) {Reg};
+
+ \draw[->, decorate] ($(heron.east)+(0,1.4cm)$) -- node[above,pos=0.33,font=\small] {Request} ($(cloaca.west)+(0,1.4cm)$);
+ \node[draw, rectangle, decorate, minimum width=0.6cm, minimum height=0.6cm, rect crayon fill={LightBlue!60, line width=1.5mm}, anchor=east, yshift=1.4cm] (rreq) at ($(heron.east)!0.9!(cloaca.west)$) {Reg};
+
+ \draw[->, decorate] ($(heron.east)+(0,2.2cm)$) -- node[above,pos=0.33,font=\small] {Bubble} ($(cloaca.west)+(0.,2.2cm)$);
+ \node[draw, rectangle, decorate, minimum width=0.6cm, minimum height=0.6cm, rect crayon fill={LightBlue!60, line width=1.5mm}, anchor=east, yshift=2.2cm] (rbubble) at ($(heron.east)!0.9!(cloaca.west)$) {Reg};
+
+ \draw[->, decorate] ($(heron.east)+(0,3.0cm)$) -- node[above,pos=0.33,font=\small] {Mutation} ($(cloaca.west)+(0.,3.0cm)$);
+ \node[draw, rectangle, decorate, minimum width=0.6cm, minimum height=0.6cm, rect crayon fill={LightBlue!60, line width=1.5mm}, anchor=east, yshift=3.0cm] (rmut) at ($(heron.east)!0.9!(cloaca.west)$) {FIFO};
+
+ \begin{pgfonlayer}{background}
+ \end{pgfonlayer}
+
+ \end{tikzpicture}

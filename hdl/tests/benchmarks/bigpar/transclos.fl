@@ -1,0 +1,66 @@
+-- main parallel version:
+-- producing a list-of-list improves parallelism, since the position of an element
+-- does not depend on all the previous elements
+-- transcl_nested :: (Eq a) => (a -> [a]) -> [a] -> [[a]]
+transcl_nested r xs =
+  let zss = cons_nested xs r zss
+  in zss
+cons_nested xs r a = id $ xs : [] ++ build_nested r a 1 a
+{-
+The version we'd actually like to write is:
+
+> transcl_nested r xs =
+>   let zss = xs : build_nested r zss 1 zss
+>   in zss
+
+...but we need to do some wacky things to get F-lite to compile the letrec
+safely for an architecture with one heap port. As is, it generates something
+like
+
+> let a = xs : b
+>     b = build_nested c
+>     c = r a 1 a
+> in a
+
+Since we only have one heap port, we cannot find a good order to instantiate `a`
+& `c`. They have dependencies on each other and we cannot instantiate an
+application until all of its data dependencies have been instantiated, or at
+least will be instantiated by the end of the current cycle. For a dual-port
+system, that's fine: just instantiate both simultaneously.
+
+Instead, we lift our the list construction into a new function `cons_nested`,
+leaving only one binding in the letrec. That's fine! However, to stop
+`cons_nested` being inlined back into `transcl_nested` with our default `-h3`
+flag, we need its body to have more than 3 applications. A dirty fix is to add a
+useless `[] ++` to the body. This is nasty --- architectural parameters are
+leaking back into the source code.
+-}
+
+-- build_nested :: Int -> [[a]] -> [[a]]
+build_nested r zss j []       = []
+build_nested r zss j (xs:xss) =
+  let zss' = map (filter (not . (flip elem (concat (take j zss)))) . r) xs
+  in zss' ++ build_nested r zss (j+length zss') xss
+
+-- Example relations
+-- r1 b n = if b>=n then [n+1] else []
+-- r2 b n = if b>=n then filter (even) (reverse $ enumFromTo 1 (n-1)) else []
+rlist d n = nfib ((d-1) `min` (n `max` d)) `seq` enumFromTo (n+1) (n+11)
+
+-- nfib :: Int -> Int
+nfib n =
+  if n <= 1
+    then 1
+    else nfib (n-1) + nfib (n-2)
+
+-- bool :: Bool -> Int
+bool True = 1
+bool False = 0
+
+main = let seeds   = enumFromTo 1 10
+           bufSize = 10 -- parBuffer size
+           m       = 49 -- Dummy value to search for
+           delay   = 16 -- Delay of `nfib` when applying the relation
+           zs = transcl_nested (rlist delay) seeds
+           strat = parBuffer bufSize (evalList rseq)
+       in bool $ m `elem` (concat (zs `using` strat))

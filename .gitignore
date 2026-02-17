@@ -1,5 +1,7 @@
 .vscode
 result
+hdl/tests/benchmarks/oldbigpar
+hdl/tests/benchmarks/treepar
 src/*.o
 src/*.hi
 src/*.dyn_hi
@@ -16,6 +18,7 @@ vhdl
 verilog
 systemverilog
 archive
+vivado/*/floorplan.xdc
 vivado/*/*.log
 vivado/*/*.jou
 vivado/*/ip

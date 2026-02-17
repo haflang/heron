@@ -141,7 +141,7 @@ cycleBoth
       (enBx, tdpIsActiveWriteEnable byteEnaBx1, addrBx)
 
   writeWriteError = deepErrorX "conflicting write/write queries"
-  readWriteError = deepErrorX "conflicting read/write queries"
+  -- readWriteError = deepErrorX "conflicting read/write queries"
 
   byteEnaAx1 = tdpMergeWriteEnable enAx byteEnaAx0
   byteEnaBx1 = tdpMergeWriteEnable enBx byteEnaBx0
@@ -153,18 +153,13 @@ cycleBoth
 
   (outA0, ram1) =
     accessRam (SNat @nAddrs) tdpIsActiveWriteEnable tdpUpdateRam addrAx byteEnaAx1 datA1 ram0
-  (outB0, ram2) =
+  (_outB0, ram2) =
     accessRam (SNat @nAddrs) tdpIsActiveWriteEnable tdpUpdateRam addrBx byteEnaBx1 datB1 ram1
+  (outB0, _) =
+    accessRam (SNat @nAddrs) tdpIsActiveWriteEnable tdpUpdateRam addrBx byteEnaBx1 datB1 ram0 -- Make sure we read from the original state
 
-  outA1 = case conflict of
-    Just Conflict{cfRWA=IsDefined True} -> readWriteError
-    Just Conflict{cfRWA=IsX _}          -> readWriteError
-    _                                   -> outA0
-
-  outB1 = case conflict of
-    Just Conflict{cfRWB=IsDefined True} -> readWriteError
-    Just Conflict{cfRWB=IsX _}          -> readWriteError
-    _                                   -> outB0
+  outA1 = outA0
+  outB1 = outB0
 
   outA2 = if MaybeX.fromMaybeX enAx then outA1 else prevA
   outB2 = if MaybeX.fromMaybeX enBx then outB1 else prevB

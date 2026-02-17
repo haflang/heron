@@ -6,7 +6,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/e1ee359d16a1886f0771cc433a00827da98d861c";
     flake-utils.url = "github:numtide/flake-utils";
-    clash-compiler.url = "github:clash-lang/clash-compiler/v1.8.1";
+    clash-compiler.url = "github:clash-lang/clash-compiler/v1.8.2";
   };
 
   outputs = { self, nixpkgs, flake-utils, clash-compiler }:
@@ -26,6 +26,7 @@
             vivado
             heron-alveo
             heron-ultra96
+            heron-pynqz2-vio
             heron-clash
             heron-verilated
             heron-emu;

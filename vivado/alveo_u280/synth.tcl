@@ -1,38 +1,40 @@
 create_project prj . -force -part xcu280-fsvh2892-2L-e
 
+#create_project prj . -force -part xcu55c-fsvh2892-2L-e
+
 # Project properties
 set_property board_part xilinx.com:au280:part0:1.1 [current_project]
+#set_property board_part xilinx.com:au55c:part0:1.0 [current_project]
 
 # Add sources
 add_files $env(HERON_VERILOG)
 set_property top topEntity [current_fileset]
 update_compile_order -fileset sources_1
-add_files -fileset constrs_1 $env(HERON_VERILOG)/Heron.Board.topEntity/topEntity.sdc
 add_files -fileset constrs_1 ./constrs.xdc
-add_files -fileset utils_1 ./rqs
+set_property USED_IN {synthesis implementation} [get_files  ./constrs.xdc]
+
+# Run clash's VIO IP instantiation script
+package require fileutil
+set tclIface ""
+source [fileutil::findByPattern $env(HERON_VERILOG) topWithVIO_vioProbe_*.clash.tcl]
+createIp $ipName
+
+# Build floorplan constraints (needs tcl constructs not available in xdc)
+source ./floorplan.tcl
 
 # Setup run
-set_property RQS_FILES ./rqs/stage2_suggestions.rqs [get_runs synth_1]
-set_property AUTO_RQS 1 [get_runs impl_1]
-set_property RQS_FILES ./rqs/stage2_suggestions.rqs [get_runs impl_1]
-
 set_property STEPS.SYNTH_DESIGN.ARGS.RETIMING true [get_runs synth_1]
-set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE PerformanceOptimized [get_runs synth_1]
+#set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE PerformanceOptimized [get_runs synth_1]
 set_property STEPS.SYNTH_DESIGN.ARGS.MAX_URAM_CASCADE_HEIGHT 1 [get_runs synth_1]
 #set_property STEPS.SYNTH_DESIGN.ARGS.MAX_BRAM_CASCADE_HEIGHT 1 [get_runs synth_1]
+set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE AreaOptimized_high [get_runs synth_1]
 set_property STEPS.OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
-set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE RQS [get_runs impl_1]
-set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE RQS [get_runs impl_1]
 set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
-set_property STEPS.PHYS_OPT_DESIGN.TCL.POST [get_files ./rqs/idr_pp_physopt_design_POST_HOOK.tcl -of [get_fileset utils_1]] [get_runs impl_1]
-set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE RQS [get_runs impl_1]
-set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE RQS [get_runs impl_1]
-set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
-set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.TCL.POST [get_files ./rqs/idr_pr_physopt_design_POST_HOOK.tcl -of [get_fileset utils_1]] [get_runs impl_1]
-set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
+#set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
 
 # Synthesise
-launch_runs impl_1 -jobs 6
+set_param general.maxThreads 1
+launch_runs impl_1 -jobs 1
 wait_on_run impl_1
 
 # Report

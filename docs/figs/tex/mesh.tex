@@ -1,0 +1,153 @@
+\newcount\peCols
+\newcount\peRows
+\newcount\peMaxX
+\newcount\peMaxY
+\newdimen\peSep
+\newdimen\peSpan
+
+\tikzmath{
+  \peCols = 3;
+  \peRows = 3;
+  \peMaxX = \peCols-1;
+  \peMaxY = \peRows-1;
+  \peSep  = 0.35cm;
+  \peSpan = 1.8cm+\peSep;
+}
+\newcommand{\activatePE}[2]{
+  \node[pe, fill=white] at (#1\peSpan,#2\peSpan) {};
+  \node[innerpeactive] at (#1\peSpan,#2\peSpan) {};
+  \node[pe] at (#1\peSpan,#2\peSpan) {\includesvg[width=1.8cm]{heron}};
+}
+\newcommand{\activateDown}[2]{
+  \pgfmathsetmacro\z{int( #2-1 )}
+  \draw [->,bus,white]             ($(pe#1#2.south)-(0.1,0)$)--($(pe#1\z.north)-(0.1,0)$);
+  \draw [->,bus,Orange,very thick] ($(pe#1#2.south)-(0.1,0)$)--($(pe#1\z.north)-(0.1,0)$);
+  \draw [<-,bus,white]             ($(pe#1#2.south)+(0.1,0)$)--($(pe#1\z.north)+(0.1,0)$);
+  \draw [<-,bus,Orange,very thick] ($(pe#1#2.south)+(0.1,0)$)--($(pe#1\z.north)+(0.1,0)$);
+}
+\newcommand{\activateLeft}[2]{
+  \pgfmathsetmacro\z{int( #1-1 )}
+  \draw [->,bus,white]             ($(pe#1#2.west)-(0,0.1)$)--($(pe\z#2.east)-(0,0.1)$);
+  \draw [->,bus,Orange,very thick] ($(pe#1#2.west)-(0,0.1)$)--($(pe\z#2.east)-(0,0.1)$);
+  \draw [<-,bus,white]             ($(pe#1#2.west)+(0,0.1)$)--($(pe\z#2.east)+(0,0.1)$);
+  \draw [<-,bus,Orange,very thick] ($(pe#1#2.west)+(0,0.1)$)--($(pe\z#2.east)+(0,0.1)$);
+}
+
+\begin{tikzpicture}
+   [penciline={jag ratio=1}
+   ,lbl/.style=
+     { minimum width=2.4cm
+     , text width=2.4cm
+     , align=center
+     }
+   ,code/.style=
+     { minimum width=2.3cm
+     , text width=2.3cm
+     , align=left
+     , rect crayon fill={LightBlue!30, opacity=0.9, line width=3mm}
+     , draw
+     , -
+     , decorate
+     }
+   ,blk/.style=
+     { lbl
+     , rectangle
+     , minimum height=5cm
+     }
+   ,pe/.style=
+     { align=center
+     , rectangle
+     , minimum width=1.8cm
+     , minimum height=1.8cm
+     }
+   ,pebounds/.style=
+     { align=center
+     , rectangle
+     , minimum width=1.8cm
+     , minimum height=1.8cm
+     }
+   ,innerpe/.style=
+     { align=center
+     , minimum width=1.1cm
+     , rectangle
+     , minimum height=1.1cm
+     , rect crayon fill={LightBlue, opacity=0.6, line width=1mm}
+     }
+   ,innerpeactive/.style=
+     { align=center
+     , minimum width=1.1cm
+     , rectangle
+     , minimum height=1.1cm
+     , rect crayon fill={Orange, opacity=0.6, line width=1mm}
+     }
+   ,bus/.style=
+     { thick
+     , black!60
+     % , penciline={jag ratio=1},
+     % , decorate
+     }
+   ,impbus/.style=
+     { bus
+     , black!30
+     }
+   ,subsys/.style=
+     { decorate
+     , draw
+     , rectangle
+     ,minimum width=0.7cm
+     ,text width=0.7cm
+     ,anchor=west
+     ,align=center
+     ,minimum height=0.7cm
+     ,rect crayon fill={LightBlue, opacity=0.6, line width=1mm}
+     }
+   ]
+
+ % PE nodes
+ \foreach \x in {0,...,\peMaxX}
+   \foreach \y in {0,...,\peMaxY}
+      {
+      \node [innerpe] at (\x*\peSpan,\y*\peSpan) {};
+      \node [pebounds] (pe\x\y) at (\x*\peSpan,\y*\peSpan) {};
+      \node [pe]  at (\x*\peSpan,\y*\peSpan) {\includesvg[width=1.8cm]{heron-logo}};
+      }
+
+ % Internal x connects
+ \pgfmathsetmacro\almostX{\peMaxX-1}
+ \foreach \x in {0,...,\almostX}
+   \foreach \y in {0,...,\peMaxY}
+     {\pgfmathsetmacro\z{int(1+\x)}
+       \draw [->,bus] ($(pe\x\y.east)+(0,0.1)$)--($(pe\z\y.west)+(0,0.1)$);
+       \draw [<-,bus] ($(pe\x\y.east)-(0,0.1)$)--($(pe\z\y.west)-(0,0.1)$);
+     }
+
+ % Internal y connects
+ \pgfmathsetmacro\almostY{\peMaxY-1}
+ \foreach \x in {0,...,\peMaxX}
+   \foreach \y in {0,...,\almostY}
+     {\pgfmathsetmacro\z{int(1+\y)}
+       \draw [->,bus] ($(pe\x\y.north)+(0.1,0)$)--($(pe\x\z.south)+(0.1,0)$);
+       \draw [<-,bus] ($(pe\x\y.north)-(0.1,0)$)--($(pe\x\z.south)-(0.1,0)$);
+     }
+
+ % Implied x connects
+ \foreach \y in {0,...,\peMaxY}
+     { \draw [->,impbus] ($(pe0\y.west)+(0,0.1)$)--($(pe0\y.west)-(\peSep,0)+(0,0.1)$);
+       \draw [<-,impbus] ($(pe0\y.west)-(0,0.1)$)--($(pe0\y.west)-(\peSep,0)-(0,0.1)$);
+       \draw [->,impbus] ($(pe2\y.east)+(0,0.1)$)--($(pe2\y.east)+(\peSep,0)+(0,0.1)$);
+       \draw [<-,impbus] ($(pe2\y.east)-(0,0.1)$)--($(pe2\y.east)+(\peSep,0)-(0,0.1)$);
+     }
+
+% Implied y connects
+\foreach \x in {0,...,\peMaxX}
+    { \draw [->,impbus] ($(pe\x2.north)+(0.1,0)$)--($(pe\x2.north)+(0,\peSep)+(0.1,0)$);
+      \draw [<-,impbus] ($(pe\x2.north)-(0.1,0)$)--($(pe\x2.north)+(0,\peSep)-(0.1,0)$);
+      \draw [->,impbus] ($(pe\x0.south)+(0.1,0)$)--($(pe\x0.south)-(0,\peSep)+(0.1,0)$);
+      \draw [<-,impbus] ($(pe\x0.south)-(0.1,0)$)--($(pe\x0.south)-(0,\peSep)-(0.1,0)$);
+    }
+
+% Bounding box
+\foreach \p in {60,100}
+  \node [draw=black!\p, penciline={jag ratio=2}, decorate, rectangle, fit={(pe00.south west) (pe22.north east)}, inner sep=0.5\peSep] (siege) {};
+
+ \end{tikzpicture}

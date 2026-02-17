@@ -1,18 +1,19 @@
 module Flite.Flite (main) where
 
-import Paths_flite (version)
-import Data.Version (showVersion)
-import Flite.Syntax
-import Flite.Parse
-import Flite.Pretty
-import Flite.Inline
-import Flite.Compile
-import Flite.Frontend
-import qualified Flite.PrettyHaskell as PH
-import Data.List
-import System.IO
-import System.Environment
-import System.Console.GetOpt
+import           Data.List             (elemIndex)
+import           Data.Version          (showVersion)
+import           Flite.Compile
+import           Flite.Frontend
+import           Flite.Inline
+import           Flite.Parse
+import           Flite.Pretty          (pretty)
+import           Flite.Syntax          (showProg)
+import qualified Flite.TemplateSyntax  as TS
+import           Paths_flite           (version)
+import           System.Console.GetOpt
+import           System.Environment
+import           System.IO
+import Flite.Identify (identifyFuncs)
 
 data Flag =
     Desugar
@@ -21,30 +22,31 @@ data Flag =
   | InlineH (Maybe Int)
   | StrictnessAnalysis
   | InlineI (Maybe Int)
-  | VerboseResult
+  | PrettyPrint
   deriving Eq
 
-isDisjoint (InlineH i) = False
-isDisjoint (InlineI i) = False
+isDisjoint :: Flag -> Bool
+isDisjoint (InlineH _)        = False
+isDisjoint (InlineI _)        = False
 isDisjoint StrictnessAnalysis = False
-isDisjoint VerboseResult = False
-isDisjoint flag = True
+isDisjoint PrettyPrint        = False
+isDisjoint _                  = True
 
 options :: [OptDescr Flag]
 options =
-  [ Option ['d'] [] (NoArg Desugar) "desugar"
-  , Option ['t'] [] (NoArg Translate) "translate"
+  [ Option ['t'] [] (NoArg Translate) "Translate to AST"
+  , Option ['d'] [] (NoArg Desugar) "Desugar to subset of AST"
   , Option ['r'] [] (OptArg red "MAXPUSH:APSIZE:MAXAPS:MAXLUTS:MAXREGS:MAXAPSPAN")
-                    "compile to Heron templates"
+                    "Compile to Heron templates"
   , Option ['h'] [] (OptArg (InlineH . fmap read) "MAXAPS")
-                    "inline small function bodies early"
+                    "Inline small function bodies early"
   , Option ['i'] [] (OptArg (InlineI . fmap read) "MAXAPS")
-                    "inline small function bodies late"
-  , Option ['s'] [] (NoArg StrictnessAnalysis) "employ strictness analysis"
-  , Option ['v'] [] (NoArg VerboseResult) "show the integer result from main"
+                    "Inline small function bodies late"
+  , Option ['s'] [] (NoArg StrictnessAnalysis) "Employ strictness analysis"
+  , Option ['p'] [] (NoArg PrettyPrint) "Pretty print templates"
   ]
   where
-    redDefaults = CompileToTemplates 6 4 2 1 8 8
+    redDefaults = CompileToTemplates 6 4 2 1 2 16
     red Nothing = redDefaults
     red (Just s) =
       case split ':' s of
@@ -52,15 +54,18 @@ options =
           CompileToTemplates (read a) (read b) (read c) (read d) (read e) (read f)
         _ -> error (usageInfo header options)
 
-header = "Usage: Flite [OPTION...] FILE.hs \n"
+header :: [Char]
+header = "Usage: flite [OPTION...] FILE.fl \n"
       ++ "Version " ++ showVersion version
 
+main :: IO ()
 main =
   do args <- getArgs
      case getOpt Permute options args of
        (flags, [fileName], []) -> run flags fileName
        (_, _, errs) -> error (concat errs ++ usageInfo header options)
 
+run :: [Flag] -> FilePath -> IO ()
 run flags fileName =
   do hSetBuffering stdout NoBuffering
      p <- parseProgFile fileName
@@ -71,16 +76,17 @@ run flags fileName =
                           ++ [InlineSmall i | InlineI (Just i) <- flags]
                           ++ [NoInline]
      let sa = StrictnessAnalysis `elem` flags
+     let ppr = PrettyPrint `elem` flags
      case filter isDisjoint flags of
        [Translate] ->
-         putStrLn $ PH.pretty p
+         let p' = elimDeadFuns $ identifyFuncs p in
+         if ppr then putStrLn (pretty p') else print p'
        [Desugar] ->
-         putStrLn $ pretty $ frontend sa maxBound (inlineFlagH, inlineFlagI) p
+         putStrLn $ showProg $ frontend sa maxBound (inlineFlagH, inlineFlagI) p
        [CompileToTemplates slen alen napps nluts nregs aspan] ->
-         mapM_ print $ redCompile (inlineFlagH, inlineFlagI) sa slen alen napps nluts nregs aspan p
+         let x = redCompile (inlineFlagH, inlineFlagI) sa slen alen napps nluts nregs aspan p
+         in if ppr then mapM_ (putStr . uncurry TS.pretty) (zip [0..] x) else mapM_ print x
        _ -> error (usageInfo header options)
-
--- Auxiliary
 
 split :: Eq a => a -> [a] -> [[a]]
 split x xs =

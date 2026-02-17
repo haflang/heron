@@ -1,12 +1,12 @@
 module Flite.Identity where
 
-import Control.Monad       (liftM, ap)
-import Control.Applicative (Applicative(..))
+import           Control.Applicative (Applicative (..))
+import           Control.Monad       (ap, liftM)
 
 newtype Identity a = I { runIdentity :: a }
 
 instance Monad Identity where
-  return a = I a
+  return = I
   I a >>= f = f a
 
 instance Functor Identity where

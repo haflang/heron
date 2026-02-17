@@ -1,10 +1,10 @@
 module Flite.Traversals where
 
-import Flite.Syntax
-import Flite.Descend
-import Control.Monad
-import Data.List
-import Flite.Fresh
+import           Control.Monad
+import           Data.List
+import           Flite.Descend
+import           Flite.Fresh
+import           Flite.Syntax
 
 funcs :: Prog -> [String]
 funcs p = [f | Func f args rhs <- p]
@@ -13,7 +13,7 @@ onPats :: (Exp -> Exp) -> Prog -> Prog
 onPats f p = [Func g (map f args) (onAlts f rhs) | Func g args rhs <- p]
   where
     onAlts f (Case e as) = Case (onAlts f e) (map (doAlts f) as)
-    onAlts f e = descend f e
+    onAlts f e           = descend f e
     doAlts f (p,e) = (f p, onAlts f e)
 
 onExp :: (Exp -> Exp) -> Prog -> Prog
@@ -53,8 +53,8 @@ substMany = foldr (uncurry subst)
 
 patVars :: Pat -> [Id]
 patVars (App e es) = concatMap patVars (e:es)
-patVars (Var v) = [v]
-patVars p = []
+patVars (Var v)    = [v]
+patVars p          = []
 
 caseAlts :: Exp -> [[Alt]]
 caseAlts (Case exp alts) = alts : caseAlts exp ++ rest
@@ -83,13 +83,14 @@ varRefs v = length . filter (== v) . freeVarsExcept' []
 
 calls :: Exp -> [Id]
 calls (Fun f) = [f]
-calls e = extract calls e
+calls e       = extract calls e
 
 maybeCalls :: Exp -> [Id]
-maybeCalls (Fun f) = [f]
+maybeCalls (Fun f)               = [f]
+maybeCalls (Case e alts)         = maybeCalls e ++ concatMap (maybeCalls . snd) alts
 maybeCalls (Alts (AFuns fs)   _) = fs
 maybeCalls (Alts (AInline as) _) = concatMap (maybeCalls . snd) as
-maybeCalls e = extract maybeCalls e
+maybeCalls e                     = extract maybeCalls e
 
 lookupFuncs :: Id -> Prog -> [Decl]
 lookupFuncs f p = [Func g args rhs | Func g args rhs <- p, f == g]
@@ -105,16 +106,16 @@ freshen (Let bs e) =
   do let (vs, es) = unzip bs
      e' <- freshen e
      es' <- mapM freshen es
-     ws <- mapM (\_ -> fresh) vs
+     ws <- mapM (const fresh) vs
      let s = zip (map Var ws) vs
-     return $ Let (zip ws (map (flip substMany s) es'))
+     return $ Let (zip ws (map (`substMany` s) es'))
                   (substMany e' s)
 freshen (Case e as) = return Case `ap` freshen e `ap` mapM freshenAlt as
 freshen e = descendM freshen e
 
 freshenPat :: Pat -> Fresh Pat
 freshenPat (Var _) = return Var `ap` fresh
-freshenPat p = descendM freshenPat p
+freshenPat p       = descendM freshenPat p
 
 freshenAlt :: (Pat, Exp) -> Fresh (Pat, Exp)
 freshenAlt (p, e) =
@@ -125,7 +126,46 @@ freshenAlt (p, e) =
 
 freshBody :: ([Id], Exp) -> Fresh ([Id], Exp)
 freshBody (vs, e) =
-  do ws <- mapM (\_ -> fresh) vs
+  do ws <- mapM (const fresh) vs
      e' <- freshen e
      let s = zip (map Var ws) vs
      return (ws, substMany e' s)
+
+-- a bottom-up traversal of an expression, applying a transformation at
+--   each stage.
+gather :: ( Exp -> (Exp, [a]) ) -> Exp -> (Exp, [a])
+gather f (App e args) = (exp, xs'')
+    where
+        (exp, xs) = f (App e' args')
+        (e', xs') = gather f e
+        (args', xss) = unzip $ map (gather f) args
+        xs'' = concat (xs:xs':xss)
+gather f (Case e alts) = (exp, xs'')
+    where
+        (exp, xs) = f (Case e' alts')
+        (e', xs') = gather f e
+        (alts', xss) = unzip $ map (gatherAlt f) alts
+        xs'' = concat (xs:xs':xss)
+gather f (Let bs e) = (exp, xs'')
+    where
+        (exp, xs) = f (Let bs' e')
+        (bs', xss) = unzip $ map (gatherBinding f) bs
+        (e', xs') = gather f e
+        xs'' = concat (xs:xs':xss)
+gather f (Lam is e) = (exp, xs'')
+    where
+        (exp, xs) = f (Lam is e)
+        (e, xs') = gather f e
+        xs'' = xs ++ xs'
+gather f e = f e
+
+gatherAlt :: ( Exp -> (Exp, [a]) ) -> Alt -> (Alt, [a])
+gatherAlt f (p, e) = ( (p', e'), xs ++ xs')
+    where
+        (p', xs) = gather f p
+        (e', xs') = gather f e
+
+gatherBinding :: ( Exp -> (Exp, [a]) ) -> Binding -> (Binding, [a])
+gatherBinding f (id, e) = ( (id, e'), xs )
+    where
+        (e', xs) = gather f e

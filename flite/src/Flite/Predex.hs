@@ -6,21 +6,23 @@
 -- range of ways with varying ease and efficiency.  (As the feature is
 -- experimental, we have taken a rather simple-minded approach to
 -- compilation.)
+{-# LANGUAGE GADTs         #-}
+{-# LANGUAGE TupleSections #-}
 
 module Flite.Predex where
 
-import Data.List
-import Data.Maybe (catMaybes)
-import Flite.Syntax
-import Control.Monad
-import Control.Applicative (Applicative(..))
-import Flite.Traversals
+import           Control.Applicative  (Applicative (..))
+import           Control.Monad
+import           Data.List
+import           Data.Maybe           (catMaybes, fromMaybe)
+import           Debug.Trace
+import           Flite.Syntax
 import qualified Flite.TemplateSyntax as R
-import Debug.Trace
+import           Flite.Traversals
 
 -- Identify candidates.
 identifyPredexCandidates :: Int -> Prog -> Prog
-identifyPredexCandidates nregs p = onExp (identify nregs) p
+identifyPredexCandidates nregs = onExp (identify nregs)
 
 identify :: Int -> Exp -> Exp
 identify 0 e = e
@@ -44,7 +46,7 @@ ident spine scope (App e es) =
 ident spine scope (Let bs e) =
   do let (vs, es) = unzip bs
      let scope' = zip vs (map isPrimApp es) ++ scope
-     es' <- mapM (ident False scope') (es)
+     es' <- mapM (ident False scope') es
      e' <- ident spine scope' e
      return (Let (zip vs es') e')
 ident spine scope (PrimApp p es) = return (PrimApp p es)
@@ -52,26 +54,25 @@ ident spine scope e = return e
 
 isPrimApp :: Exp -> Bool
 isPrimApp (PrimApp p es) = True
-isPrimApp _ = False
+isPrimApp _              = False
 
 checkArgs :: [(Id, Bool)] -> [Exp] -> Bool
-checkArgs scope es = all (checkArg scope) es
+checkArgs scope = all (checkArg scope)
 
 checkArg :: [(Id, Bool)] -> Exp -> Bool
 checkArg scope (Int i) = True
 checkArg scope (PrimApp p xs) = True
 checkArg scope (Var v) =
-  case lookup v scope of
-    Nothing -> True
-    Just b -> b
+  fromMaybe True (lookup v scope)
 checkArg scope e = False
 
 -- A monad that allows one to count and bound the number of
 -- transformations that are applied during a computation.
-data Count a = Count { runCount :: Int -> (Int, a) }
+data Count a where
+  Count :: {runCount :: Int -> (Int, a)} -> Count a
 
 instance Monad Count where
-  return a = Count $ \n -> (n, a)
+  return a = Count (,a)
   x >>= f = Count $ \n -> case runCount x n of (m, y) -> runCount (f y) m
 
 instance Functor Count where
@@ -88,8 +89,8 @@ one a b = Count $ \n -> if n > 0 then (n-1, a) else (n, b)
 -- not occupy the spine
 removePredexSpine :: Exp -> Exp
 removePredexSpine (PrimApp p xs) = App (PrimApp p xs) []
-removePredexSpine (Let bs e) = Let bs (removePredexSpine e)
-removePredexSpine e = e
+removePredexSpine (Let bs e)     = Let bs (removePredexSpine e)
+removePredexSpine e              = e
 
 -- Given a flattened body, ensure primitive applications occur
 -- before their use, and before any non primitive applications.
@@ -105,14 +106,16 @@ predexReorder maxRegs apps
 -- Detect primitive applications
 isPrimitiveApp :: App -> Bool
 isPrimitiveApp [_,_,Prim p] = True
-isPrimitiveApp app = False
+isPrimitiveApp app          = False
 
 -- An application A depends on an application B if A refers to B's result.
 depends :: (Id, App) -> (Id, App) -> Bool
-depends (v, a) (w, b) = any (`refersTo` w) a
+depends (v, a) (w, b)
+  | v == w = False
+  | otherwise = any (`refersTo` w) a
 
 refersTo (Var v) w = v == w
-refersTo _ _ = False
+refersTo _ _       = False
 
 -- Split applications into groups of independent applications, where
 -- each group has no dependencies on any later level.
@@ -137,9 +140,9 @@ predex n (spine, apps) =
     nprims = countPrims apps'
 
 redirectApp :: Int -> R.App -> R.App
-redirectApp n app = mapAtoms (redirect n) app
+redirectApp n = mapAtoms (redirect n)
 
-redirect n (R.VAR s i) | i < n = R.REG s i
+redirect n (R.VAR s _ _ i) | i < n = R.REG s i
 redirect n a = a
 
 regAlloc :: [R.App] -> [R.App]
@@ -147,18 +150,21 @@ regAlloc = snd . mapAccumL alloc 0
 
 alloc :: Int -> R.App -> (Int, R.App)
 alloc r (R.PRIM _ xs) = (r+1, R.PRIM r xs)
-alloc r app = (r, app)
+alloc r app           = (r, app)
 
 countPrims :: [R.App] -> Int
 countPrims = sum . map count
   where
     count (R.PRIM r as) = 1
-    count _ = 0
+    count _             = 0
 
 mapAtoms :: (R.Atom -> R.Atom) -> R.App -> R.App
-mapAtoms f (R.APP n as) = R.APP n (map f as)
-mapAtoms f (R.PRIM r as) = R.PRIM r (map f as)
-mapAtoms f (R.CASE lut as) = R.CASE lut (map f as)
+mapAtoms f = mapAtoms' (map f)
+
+mapAtoms' :: ([R.Atom] -> [R.Atom]) -> R.App -> R.App
+mapAtoms' f (R.APP n as)    = R.APP n (f as)
+mapAtoms' f (R.PRIM r as)   = R.PRIM r (f as)
+mapAtoms' f (R.CASE lut as) = R.CASE lut (f as)
 
 -- Given a list of applications, return the initial portion that can
 -- be executed in the same clock-cycle, and the rest.
@@ -175,15 +181,18 @@ splitPredexes apps
       | any (`refersTo` rs) as = ([], R.PRIM r as:rest)
       | otherwise = (R.PRIM r as:xs, ys)
       where (xs, ys) = split (r:rs) rest
+    split rs apps = error $
+      "Flite.Predex.splitPredexes: Unexpected non-prim on list of applications"
+      ++ show apps
 
     refersTo (R.REG _ r) rs = r `elem` rs
-    refersTo _ rs = False
+    refersTo _ rs           = False
 
 splitSpineByPredexes :: [R.Atom] -> [R.App] -> [R.App] -> ([R.Atom], [R.Atom])
 splitSpineByPredexes s aps tmplAps = pRev . span (not . hasDep) $ reverse s
   where
     hasDep (R.REG _ i) = i `elem` uninstRegs
-    hasDep (R.VAR _ i) = case iOfFirstReg of
+    hasDep (R.VAR _ _ _ i) = case iOfFirstReg of
       Nothing -> False
       Just ir -> i > ir
     hasDep _ = False
@@ -199,4 +208,4 @@ splitSpineByPredexes s aps tmplAps = pRev . span (not . hasDep) $ reverse s
 
 isPRIM :: R.App -> Bool
 isPRIM (R.PRIM r as) = True
-isPRIM _ = False
+isPRIM _             = False

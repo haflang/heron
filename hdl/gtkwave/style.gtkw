@@ -1,0 +1,57 @@
+[*]
+[*] GTKWave Analyzer v3.3.116 (w)1999-2023 BSI
+[*] Mon Apr 14 09:19:04 2025
+[*]
+[dumpfile] "/tmp/heron.vcd"
+[dumpfile_mtime] "Mon Apr 14 09:14:28 2025"
+[dumpfile_size] 1136737
+[savefile] "/home/craig/heron/hdl/gtkwave/style.gtkw"
+[timestart] 0
+[size] 1920 1200
+[pos] -967 -42
+*-12.742171 6903 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] logic.
+[sst_width] 329
+[signals_width] 225
+[sst_expanded] 1
+[sst_vpaned_height] 293
+@800200
+-Phases
+@2024
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(0,0)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(0,1)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(0,2)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(1,0)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(1,1)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(1,2)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(2,0)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(2,1)_phase[3:0]
+^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+logic.Core_(2,2)_phase[3:0]
+@1000200
+-Phases
+@800200
+-Spark pools
+@24
+logic.Core_(0,0)_sparks[9:0]
+logic.Core_(0,1)_sparks[9:0]
+logic.Core_(0,2)_sparks[9:0]
+logic.Core_(1,0)_sparks[9:0]
+logic.Core_(1,1)_sparks[9:0]
+logic.Core_(1,2)_sparks[9:0]
+logic.Core_(2,0)_sparks[9:0]
+logic.Core_(2,1)_sparks[9:0]
+@25
+logic.Core_(2,2)_sparks[9:0]
+@1000200
+-Spark pools
+[pattern_trace] 1
+[pattern_trace] 0

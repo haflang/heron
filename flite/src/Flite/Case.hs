@@ -1,24 +1,18 @@
-module Flite.Case (caseElim, caseElimWithCaseStack, Family, families, familyTable) where
+module Flite.Case (caseElim, caseLift, Family, families, familyTable) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.State
-import Control.Monad
-import Data.List as List
-import Data.Set as Set
-import Data.Map as Map
+import           Control.Monad
+import           Data.List        as List
+import           Data.Map         as Map
+import           Data.Set         as Set
+import           Flite.Descend
+import           Flite.State
+import           Flite.Syntax
+import           Flite.Traversals
 
 -- Assumes that pattern matching has been desugared.
 
-caseElim :: Prog -> Prog
-caseElim = caseElim' False
-
-caseElimWithCaseStack :: Prog -> Prog
-caseElimWithCaseStack = caseElim' True
-
-caseElim' :: Bool -> Prog -> Prog
-caseElim' cstk p = elim cstk fs (expandCase ft p)
+caseLift :: Prog -> Prog
+caseLift p = liftAlts' fs (expandCase ft p)
   where
     fs = families p
     ft = familyTable fs
@@ -49,14 +43,14 @@ families p
     fam e = List.map (concatMap getCtr) (caseAlts e)
 
     getCtr (App (Con c) ps, e) = [(c, length ps)]
-    getCtr (p, e) = []
+    getCtr (p, e)              = []
 
 familyTable :: [Family] -> Map Id Family
 familyTable fams =
   Map.fromList [(id, fam) | fam <- fams, (id, arity) <- Set.toList fam]
 
 expandCase :: Map Id Family -> Prog -> Prog
-expandCase table p = onExp expand p
+expandCase table = onExp expand
   where
     expand (Case e ((Var v, rhs):as)) = expand (Let [(v, e)] rhs)
     expand (Case e alts@((App (Con c) ps, rhs):as)) = Case (expand e) alts'
@@ -67,8 +61,21 @@ expandCase table p = onExp expand p
             bottom f n = (App (Con f) (replicate n (Var "_")), Bottom)
     expand e = descend expand e
 
-elim :: Bool -> [Family] -> Prog -> Prog
-elim cstk fams p = concatMap comp p
+caseElim :: Prog -> Prog
+caseElim = List.map comp
+  where
+    comp d = d { funcRhs = compFun (funcName d) (funcRhs d) }
+
+    compFun fun (App (Case e as) fvs) =
+      App (compFun fun e) (calts fun as fvs : fvs)
+    compFun fun e = descend (compFun fun) e
+
+    calts fun as fvs = Alts (AFuns fs) (length fvs)
+      where (ps, es) = unzip as
+            fs = List.map (\(App (Fun f) _) -> f) es
+
+liftAlts' :: [Family] -> Prog -> Prog
+liftAlts' fams = concatMap comp
   where
     ctrInfo = [ (f, (arity, i))
               | fs <- List.map Set.toAscList fams
@@ -80,28 +87,38 @@ elim cstk fams p = concatMap comp p
 
     compFun fun (Con c)
       | Prelude.null cinfo = return Bottom
-      | otherwise = return (Ctr c (fst $ head cinfo) (snd $ head cinfo))
+      | otherwise = return (uncurry (Ctr c) (head cinfo))
       where cinfo = [ci | (d, ci) <- ctrInfo, c == d]
-    compFun fun (Case e as) =
-      return App `ap` compFun fun e `ap` calts fun as
+    compFun fun (Case e as) = do
+      (alts, fvs) <- calts fun as
+      e' <- compFun fun e
+      pure $ App (Case e' alts) fvs
     compFun fun e = descendM (compFun fun) e
 
     calts fun as =
       do es' <- mapM (compFun fun) es
-         let fvs = nub $ concat $ zipWith (freeVarsExcept) vss es'
+         let fvs = nub $ concat $ zipWith freeVarsExcept vss es'
          fs <- zipWithM (calt fun fvs) vss es'
-         let alts = Alts (AFuns fs) (length fvs)
-         return ([alts] ++ [Int 0 | cstk && List.null fvs] ++ List.map Var fvs)
+         let alts = zipWith3 (\p f vs -> (p, App (Fun f) (List.map Var vs))) ps fs vss
+         return (alts, [Int 0 | List.null fvs] ++ List.map Var fvs)
       where (ps, es) = unzip as
             vss = List.map (\(App _ args) -> [v | Var v <- args]) ps
 
     calt fun fvs vs e =
       do n <- newAlt
          let name = fun ++ "#" ++ show n
-         let args = vs ++ ["$ct" | not cstk || (cstk && List.null fvs)] ++ fvs
+         let args = vs ++ ["$ct" | List.null fvs] ++ fvs
          addDecl (Func name (List.map Var args) e)
          return name
 
     newAlt = S (\(i, ds) -> ((i+1, ds), i))
 
     addDecl d = S (\(i, ds) -> ((i, ds ++ [d]), ()))
+
+{-
+Note
+~~~~
+
+The additional "Int 0" argument seems to influence the order of operations
+inferred --- update subject before selecting case expression, or vice versa
+-}

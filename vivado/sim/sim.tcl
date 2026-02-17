@@ -9,7 +9,7 @@ foreach file [fileutil::findByPattern $env(HERON_VERILOG) *.v] {
 # set unisim_dir $env(XILINX_VIVADO)/data/verilog/src/unisims/
 # exec xvlog $env(XILINX_VIVADO)/data/verilog/src/glbl.v
 # exec xvlog $env(XILINX_VIVADO)/data/verilog/src/unisims/BUFGCE_DIV.v
-exec xelab -debug typical -top testBench work.glbl -snapshot tb_snapshot
+exec xelab -debug typical -top testBench -snapshot tb_snapshot
 
 # Simulate
 exec xsim tb_snapshot -tclbatch sim_cfg.tcl

@@ -21,14 +21,12 @@
 #define MAXLUTS 1 //2
 #define MAXREGS 6 // 8
 
-#define MAXHEAPAPPS    32768
+#define MAXHEAPAPPS    64*1024//32768
 #define MAXSTACKELEMS  8192
 #define MAXUSTACKELEMS 4096
 #define MAXLSTACKELEMS 4096
 #define MAXPSTACKELEMS 4096
 #define MAXTEMPLATES   1024
-#define CACHELEN    32
-#define TCACHELEN   16
 
 #define NAMELEN 128
 
@@ -57,15 +55,15 @@ typedef int Num;
 
 typedef struct { Bool shared; Int index; } Reg;
 
-typedef struct { Bool shared; Int index; } Arg;
+typedef struct { Bool shared; Bool seq; Bool par; Int index; } Arg;
 
-typedef struct { Bool shared; Int id; } Var;
+typedef struct { Bool shared; Bool seq; Bool par; Int id; } Var;
 
 typedef struct { Int arity; Int index; } Con;
 
 typedef struct { Bool original; Int arity; Int id; } Fun;
 
-typedef enum { ADD, SUB, EQ, NEQ, LEQ, EMIT, EMITINT, SEQ, AND, ST32, LD32, LAST_PRIM } Prim;
+typedef enum { ADD, SUB, EQ, NEQ, LEQ, EMIT, EMITINT, UNWRAP, AND, ST32, LD32, LAST_PRIM } Prim;
 
 typedef struct { Int arity; Bool swap; Prim id; } Pri;
 
@@ -108,10 +106,7 @@ typedef struct
     App apps[MAXAPS];
   } Template;
 
-typedef struct { Int saddr; Int haddr; } Update;
-
-typedef struct { Bool valid; Int addr; Int timestamp; App app; } CacheLine;
-typedef struct { Bool valid; Int addr; Int timestamp; Template tmpl; } TCacheLine;
+typedef struct { Int saddr; Int haddr; Bool discard; } Update;
 
 const Atom falseAtom = {.tag = CON, .contents.con = {0, 0}};
 
@@ -129,8 +124,6 @@ Lut* lstack;
 Atom* pstack;
 Template* code;
 Atom *registers;
-CacheLine* cache;
-TCacheLine* tcache;
 Atom* frozen_stack;
 
 
@@ -145,12 +138,6 @@ Long swapCount, primCount, applyCount, unwindCount, heapUtilCount,
   updateCount, selectCount, prsCandidateCount, prsSuccessCount, caseCount, heapWaitCount, inlineAltCount, heapAllocCount, immediateFreeCount;
 
 Int maxHeapUsage, maxStackUsage, maxUStackUsage, maxLStackUsage, maxPStackUsage;
-
-Long cacheMisses, cacheHits = 0;
-Int cacheTime = 0;
-
-Long tcacheMisses, tcacheHits = 0;
-Int tcacheTime = 0;
 
 Bool tracingEnabled = 0;
 int stepno = 0;
@@ -208,6 +195,16 @@ static char *shareStr(int sh)
     return sh ? "*" : "";
 }
 
+static char *seqStr(int sh)
+{
+    return sh ? "^" : "";
+}
+
+static char *parStr(int sh)
+{
+    return sh ? "|" : "";
+}
+
 void showAtom(Atom a)
 {
     static const char *primName[] = {
@@ -218,7 +215,7 @@ void showAtom(Atom a)
         "<=",
         "emit",
         "emitInt",
-        "!",
+        "unwrap",
         ".&.",
         "st32",
         "ld32",
@@ -226,9 +223,9 @@ void showAtom(Atom a)
 
     switch (a.tag) {
     case NUM: printf("%d", a.contents.num); break;
-    case ARG: printf("a%d%s", a.contents.arg.index, shareStr(a.contents.arg.shared)); break;
+    case ARG: printf("a%d%s%s%s", a.contents.arg.index, shareStr(a.contents.arg.shared), seqStr(a.contents.arg.seq), parStr(a.contents.arg.par)); break;
     case REG: printf("r%d%s", a.contents.reg.index, shareStr(a.contents.reg.shared)); break;
-    case VAR: printf("h%d%s", a.contents.var.id,    shareStr(a.contents.var.shared)); break;
+    case VAR: printf("h%d%s%s%s", a.contents.var.id, shareStr(a.contents.var.shared), seqStr(a.contents.var.seq), parStr(a.contents.var.par)); break;
     case CON: printf("C%d%s", a.contents.con.index, arityStr(a.contents.con.arity)); break;
     case FUN: printf("F%d", a.contents.fun.id); break;
     case PRI: printf("%s(%s)", a.contents.pri.swap ? "swap:" : "",
@@ -246,7 +243,7 @@ void showAlt(Lut l)
     showAtom(l.alts[0].a);
     printf (", %d -> ", l.alts[1].pops);
     showAtom(l.alts[1].a);
-    printf (" ");
+    printf (") ");
   }
 }
 
@@ -290,172 +287,6 @@ void showApp(int addr)
         showAtom(app.atoms[i]);
     }
     printf(")");
-}
-
-
-/* Caching */
-
-void cacheInvalidate(Int addr)
-{
-  Int i;
-  for (i=0; i<CACHELEN; i++)
-    if (cache[i].addr == addr)
-      cache[i].valid = 0;
-}
-
-Bool refInStk(Int addr, Int search_depth)
-{
-  Int i;
-  Atom a;
-  for (i=0; i<search_depth; i++){
-    a = stack[sp-1-i];
-    if (a.tag == VAR && a.contents.var.id == addr){
-      return 1;
-    }
-  }
-  return 0;
-}
-
-void cacheUpdate(Int addr, App app)
-{ // Evict by Least-recently-used
-  Int i;
-  Int oldestT, updateI;
-  CacheLine line;
-
-  cacheInvalidate(addr);
-
-  // Find oldest
-  for (i=0, oldestT=cacheTime, updateI=0; i<CACHELEN; i++){
-    if (cache[i].valid) {
-      if (oldestT > cache[i].timestamp && !(refInStk(cache[i].addr, 8))) {
-        updateI = i;
-        oldestT = cache[i].timestamp;
-      }
-    } else {
-      updateI = i;
-      oldestT = -1;
-    }
-  }
-
-  // Update cache line
-  line.app = app;
-  line.valid = 1;
-  line.addr = addr;
-  line.timestamp = cacheTime++;
-  cache[updateI] = line;
-
-  //printf("Updated entry for %d in line %d\n", addr, updateI);
-  //showApp2(cache[updateI].app);
-}
-
-App cachedRead(Int addr)
-{
-  Int i;
-  App app;
-
-  // check for entry in cache
-  for (i=0; i<CACHELEN; i++){
-    if (cache[i].valid && cache[i].addr == addr) {
-      // Found it, update timestamp and return
-      cacheHits++;
-      cache[i].timestamp = cacheTime++;
-      //printf("Cache hit for %d in line %d\n", addr, i);
-      //showApp2(cache[i].app);
-      return cache[i].app;
-    }
-  }
-
-  // Didn't find it
-  //printf("Cache miss for %d...: ", addr);
-  cacheMisses++;
-  app = heap[addr];
-  cacheUpdate(addr, app);
-  return app;
-}
-
-void cachedWrite(Int addr, App app)
-{
-  cacheUpdate(addr, app);
-  heap[addr] = app;
-}
-
-void gcCache()
-{
-  Int i;
-  App app;
-
-  for (i = 0; i < CACHELEN; i++) {
-
-    if (cache[i].valid) {
-      app = heap[cache[i].addr];
-
-      if (app.tag >= INVALID)
-        error("Yikes! Cache points to invalid heap cell");
-
-      if (app.tag == COLLECTED) {
-        cache[i].addr = app.atoms[0].contents.var.id;
-        cache[i].app  = heap2[cache[i].addr];
-      } else {
-        cache[i].valid = 0;
-      }
-    }
-
-  }
-}
-
-void tcacheUpdate(Int addr, Template tmpl)
-{ // Evict by Least-recently-used
-  Int i;
-  Int oldestT, updateI;
-  TCacheLine line;
-
-  // Find oldest
-  for (i=0, oldestT=tcacheTime, updateI=0; i<TCACHELEN; i++){
-    if (tcache[i].valid) {
-      if (oldestT > tcache[i].timestamp) {
-        updateI = i;
-        oldestT = tcache[i].timestamp;
-      }
-    } else {
-      updateI = i;
-      oldestT = -1;
-    }
-  }
-
-  // Update tcache line
-  line.tmpl = tmpl;
-  line.valid = 1;
-  line.addr = addr;
-  line.timestamp = tcacheTime++;
-  tcache[updateI] = line;
-
-  //printf("Updated entry for %d in line %d\n", addr, updateI);
-  //showApp2(tcache[updateI].app);
-}
-
-Template tcachedRead(Int addr)
-{
-  Int i;
-  Template tmpl;
-
-  // check for entry in tcache
-  for (i=0; i<TCACHELEN; i++){
-    if (tcache[i].valid && tcache[i].addr == addr) {
-      // Found it, update timestamp and return
-      tcacheHits++;
-      tcache[i].timestamp = tcacheTime++;
-      //printf("Tcache hit for %d in line %d\n", addr, i);
-      //showApp2(tcache[i].app);
-      return tcache[i].tmpl;
-    }
-  }
-
-  // Didn't find it
-  //printf("Tcache miss for %d...: ", addr);
-  tcacheMisses++;
-  tmpl = code[addr];
-  tcacheUpdate(addr, tmpl);
-  return tmpl;
 }
 
 /* Display profiling table */
@@ -550,6 +381,12 @@ static void refcntcheck(Atom a)
 
 /* Dashing */
 
+Bool isShared(Atom a){
+  if (a.tag == ARG) return a.contents.arg.shared || a.contents.arg.seq || a.contents.arg.par;
+  if (a.tag == VAR) return a.contents.var.shared || a.contents.var.seq || a.contents.var.par;
+  return 0;
+}
+
 Atom dash(Bool sh, Atom a)
 {
   if (a.tag == VAR) a.contents.var.shared = a.contents.var.shared || sh;
@@ -581,28 +418,55 @@ void pushAtoms(Int size, Atom* atoms)
   for (i = size-1; i >= 0; i--) stack[sp++] = atoms[i];
 }
 
-void unwind(Bool sh, Int addr)
+void unwind(Bool sh, Bool isSeq, Bool isPar, Int addr)
 {
-  App app = cachedRead(addr);
+  App app = heap[addr];
+
+  // We just ignore sparks in this sequential emulator.
+  if (isPar) {
+    sp--;
+    // // We do this safely by replacing the top element with a call to `id`.
+    // stack[sp-1].tag = FUN;
+    // stack[sp-1].contents.fun.original = 1;
+    // stack[sp-1].contents.fun.arity = 1;
+    // stack[sp-1].contents.fun.id = 1;
+
+    return;
+  }
 
   if (app.tag >= INVALID)
       error("unwind(): invalid tag.");
 
   if (sh && !nf(&app)) {
-    Update u; u.saddr = sp; u.haddr = addr;
+    Update u;
+    u.haddr = addr;
+    u.saddr = sp;
+    // Set the discard flag if this pointer is the subject of an infix `seq`
+    // applictication
+    u.discard = isSeq;
     ustack[usp++] = u;
     //printf("UPDATE = %5d%5d\n", sp, addr);
   }
   if (!sh)
     immediateFreeCount++;
 #if ONEBITGC_STUDY1
-    if (!sh)
+  if (!sh)
     collectApp(addr);
 #endif
   dashApp(sh, &app);
-  if (app.tag == CASE) lstack[lsp++] = app.details.lut;
   sp--;
-  pushAtoms(app.size, app.atoms);
+  if (app.tag == CASE) lstack[lsp++] = app.details.lut;
+  /*
+  Bool badSeq = app.atoms[1].contents.pri.id == SEQ && app.atoms[1].tag &&
+                app.atoms[1].tag == PRI                                 &&
+                app.atoms[0].tag != VAR;
+  if (badSeq)
+    pushAtoms(app.size-2, &app.atoms[2]);
+  else
+    */
+  if (!isSeq || (sh && !nf(&app)))
+    pushAtoms(app.size, app.atoms);
+
 }
 
 /* Updating */
@@ -636,10 +500,9 @@ void upd(Atom top, Int sp, Int len, Int hp)
     heap[hp].atoms[i] = a;
     stack[j] = a;
   }
-  cachedWrite(hp, heap[hp]);
 }
 
-void update(Atom top, Int saddr, Int haddr)
+void update(Atom top, Int saddr, Int haddr, Bool discard)
 {
   Int len = 1 + sp - saddr;
   Int p = sp-2;
@@ -650,16 +513,21 @@ void update(Atom top, Int saddr, Int haddr)
       heapUtilCount++;
       upd(top, p, len, haddr);
       usp--;
-      return;
+      break;
     }
     else {
       heapAllocCount++;
       heapUtilCount++;
       upd(top, p, nodeLen, hp);
       p -= nodeLen-1; len -= nodeLen-1;
-      top.tag = VAR; top.contents.var.shared = 1; top.contents.var.id = hp;
+      top.tag = VAR; top.contents.var.shared = 1; top.contents.var.id = hp; top.contents.var.seq = 0; top.contents.var.par = 0;
       hp++;
     }
+  }
+
+  if (discard){
+    heapWaitCount++;
+    sp = saddr-1;
   }
 }
 
@@ -724,7 +592,7 @@ Atom prim(Prim p, Atom a, Atom b, Atom c)
         if (result.contents.num != n-m)
             integerAddOverflow(n, -m);
         break;
-    case EQ: result = n == m ? trueAtom : falseAtom; break;
+    case EQ:  result = n == m ? trueAtom : falseAtom; break;
     case NEQ: result = n != m ? trueAtom : falseAtom; break;
     case LEQ: result = n <= m ? trueAtom : falseAtom; break;
     default: error("Unsupported prim.");
@@ -735,10 +603,11 @@ Atom prim(Prim p, Atom a, Atom b, Atom c)
 void applyPrim()
 {
 
-  // Special case for SEQ unary prim
+  // Special case for unwrap prim
   if(stack[sp-1].tag == NUM &&
      stack[sp-2].tag == PRI &&
-     stack[sp-2].contents.pri.id == SEQ) {
+     stack[sp-2].contents.pri.id == UNWRAP) {
+    if (tracingEnabled) {printf("STEP: Prim "); showAtom(stack[sp-1]); printf(" "); showAtom(stack[sp-2]); printf(" "); showAtom(stack[sp-3]); }
     stack[sp-2] = stack[sp-3];
     stack[sp-3] = stack[sp-1];
     sp-=1;
@@ -749,6 +618,7 @@ void applyPrim()
   } else if (stack[sp-1].tag == NUM && stack[sp-2].tag == NUM &&
              stack[sp-3].tag == PRI && stack[sp-3].contents.pri.arity == 2) {
 
+    if (tracingEnabled) {printf("STEP: Prim "); showAtom(stack[sp-1]); printf(" "); showAtom(stack[sp-2]); printf(" "); showAtom(stack[sp-3]); }
     if (stack[sp-3].contents.pri.swap)
       stack[sp-3] = prim(stack[sp-3].contents.pri.id, stack[sp-2], stack[sp-1], stack[4 <= sp ? sp-4 : 0]);
     else
@@ -760,6 +630,7 @@ void applyPrim()
   // If we've evaluated one but there's another on the stack, go!
   } else if (stack[sp-1].tag == NUM && psp > 0 &&
              stack[sp-2].tag == PRI && stack[sp-2].contents.pri.arity == 2) {
+    if (tracingEnabled) {printf("STEP: Prim "); showAtom(pstack[psp-1]); printf(" "); showAtom(stack[sp-1]); printf(" "); showAtom(stack[sp-2]); }
     if (stack[sp-2].contents.pri.swap)
       stack[sp-2] = prim(stack[sp-2].contents.pri.id, stack[sp-1], pstack[psp-1], stack[3 <= sp ? sp-3 : 0]);
     else
@@ -770,6 +641,7 @@ void applyPrim()
 
   // If we've only evaluated the first arg, push it on pstack and continue;
   } else if (stack[sp-1].tag == NUM) {
+    if (tracingEnabled) {printf("STEP: Swap Prim "); showAtom(stack[sp-1]); printf(" "); showAtom(stack[sp-2]); printf(" "); showAtom(stack[sp-3]); }
     pstack[psp] = stack[sp-1];
     sp -= 1;
     psp += 1;
@@ -788,7 +660,20 @@ Atom inst(Int base, Atom a)
     a.contents.var.id = base + a.contents.var.id;
   }
   else if (a.tag == ARG) {
-    a = dash(a.contents.arg.shared, frozen_stack[a.contents.arg.index]);
+    Bool isPar = a.contents.arg.par;
+    Bool isSeq = a.contents.arg.seq;
+    a = dash(isShared(a), frozen_stack[a.contents.arg.index]);
+    if (a.tag == VAR) {
+      a.contents.var.par = isPar;
+      a.contents.var.seq = isSeq;
+    } else if (isPar || isSeq) {
+      // Seq or Par subjects that are not heap pointers resolve to a hard-coded
+      // `id` function.
+      a.tag = FUN;
+      a.contents.fun.original = 1;
+      a.contents.fun.arity = 1;
+      a.contents.fun.id = 1;
+    }
   }
   else if (a.tag == REG) {
     a = dash(a.contents.reg.shared, registers[a.contents.reg.index]);
@@ -827,13 +712,14 @@ void instApp(Int base, App *app)
     else {
       registers[rid].tag = VAR;
       registers[rid].contents.var.shared = 0;
+      registers[rid].contents.var.seq = 0;
+      registers[rid].contents.var.par = 0;
       registers[rid].contents.var.id = hp;
       new->tag = AP;
       new->details.normalForm = 0;
       new->size = app->size;
       for (i = 0; i < app->size; i++)
         new->atoms[i] = inst(base, app->atoms[i]);
-      cachedWrite(hp, *new);
       heapAllocCount++;
       heapUtilCount++;
       hp++;
@@ -846,7 +732,6 @@ void instApp(Int base, App *app)
       new->atoms[i] = inst(base, app->atoms[i]);
     if (app->tag == CASE) new->details.lut = app->details.lut;
     if (app->tag == AP) new->details.normalForm = app->details.normalForm;
-    cachedWrite(hp, *new);
     heapAllocCount++;
     heapUtilCount++;
     hp++;
@@ -869,7 +754,7 @@ void apply(Template* t)
   // if this is the first in a set of split templates, we need to freeze a copy
   // of the stack for argument referencing.
   if (stack[sp-1].contents.fun.original)
-    for (i=0; i<MAXPUSH; i++)
+    for (i=0; i<MAXPUSH && sp-2-i >= 0; i++)
       frozen_stack[i] = stack[sp-2-i];
 
   for (i = t->numLuts-1; i >= 0; i--) lstack[lsp++] = t->luts[i];
@@ -882,8 +767,10 @@ void apply(Template* t)
 
   // If we ran out of heap ports when trying to prefetch from heap,
   // and we cannot forward the application, incurr a 1-cycle penalty
-  if (hp-base >= MAXAPS && stack[sp-1].tag == VAR && stack[sp-1].contents.var.id < base)
+  if (hp-base >= MAXAPS && stack[sp-1].tag == VAR && stack[sp-1].contents.var.id < base){
+    if (tracingEnabled) printf("STEP: Heap Stall");
     heapWaitCount++;
+  }
 }
 
 /* Case-alt selection */
@@ -910,12 +797,14 @@ void caseSelect(Int index)
     stack[sp-1].contents.fun.arity = 0;
     stack[sp-1].contents.fun.id = taddr;
     applyCount++;
-    tmpl = tcachedRead(taddr);
+    tmpl = code[taddr];
     profTable[taddr].callCount++;
+    if (tracingEnabled) printf("STEP: Case-Apply %s", code[taddr].name);
     apply(&tmpl);
   } else {
     inlineAltCount++;
-    for (i=0; i<MAXPUSH; i++)
+    if (tracingEnabled) {printf("STEP: Case-Immediate "); showAtom(inst(0, b.a));}
+    for (i=0; i<MAXPUSH && sp-2-i >= 0; i++)
       frozen_stack[i] = stack[sp-2-i];
     stack[sp-1-b.pops] = inst(0, b.a);
     sp -= b.pops;
@@ -967,6 +856,7 @@ Atom copyChild(Atom child)
   }
 
   return child;
+  //TODO are seq and par flags preserved during collection?
 }
 
 void copy()
@@ -998,6 +888,7 @@ void updateUStack()
     if (app.tag == COLLECTED) {
       ustack[j].saddr = ustack[i].saddr;
       ustack[j].haddr = app.atoms[0].contents.var.id;
+      ustack[j].discard = ustack[i].discard;
       j++;
     }
   }
@@ -1013,7 +904,6 @@ void collect()
   for (i = 0; i < sp; i++) stack[i] = copyChild(stack[i]);
   copy();
   updateUStack();
-  gcCache();
   tmp = heap; heap = heap2; heap2 = tmp;
 
 #ifdef ONEBITGC_STUDY1
@@ -1052,8 +942,6 @@ void alloc()
   code = (Template*) malloc(sizeof(Template) * MAXTEMPLATES);
   registers = (Atom*) calloc(sizeof(Atom), MAXREGS);
   profTable = (ProfEntry*) malloc(sizeof(ProfEntry) * MAXTEMPLATES);
-  cache = (CacheLine*) calloc(sizeof(CacheLine), CACHELEN);
-  tcache = (TCacheLine*) calloc(sizeof(TCacheLine), TCACHELEN);
   frozen_stack = (Atom*) malloc(sizeof(Atom) * MAXPUSH);
 }
 
@@ -1070,12 +958,20 @@ void initProfTable()
 
 void init()
 {
-  sp = 1;
-  usp = lsp = psp = hp = 0;
-  stack[0] = mainAtom;
-  swapCount = primCount = applyCount =
-    unwindCount = updateCount = selectCount =
-      prsCandidateCount = prsSuccessCount = gcCount = caseCount = heapWaitCount = inlineAltCount = immediateFreeCount = 0;
+  sp = 2;
+  lsp = psp = hp = 0;
+  usp = 1;
+  ustack[0].saddr = 2;
+  ustack[0].haddr = 0;
+  ustack[0].discard = 0;
+  stack[1] = mainAtom;
+  stack[0].tag = VAR;
+  stack[0].contents.var.id = 0; // Keep a root reference to address zero, just so it isn't collected and popped off UStk.
+  stack[0].contents.var.seq = 0;
+  stack[0].contents.var.par = 0;
+  swapCount = primCount = applyCount = unwindCount = heapUtilCount = updateCount =
+    selectCount = prsCandidateCount = prsSuccessCount = caseCount = heapWaitCount =
+    inlineAltCount = heapAllocCount = immediateFreeCount = 0;
   initProfTable();
 }
 
@@ -1103,16 +999,16 @@ void dispatch()
   Atom top;
   Template tmpl;
 
-  while (!(sp == 1 && stack[0].tag == NUM)) {
+  while (usp > 0) {
       if (sp > maxStackUsage) maxStackUsage = sp;
       if (usp > maxUStackUsage) maxUStackUsage = usp;
       if (lsp > maxLStackUsage) maxLStackUsage = lsp;
       if (psp > maxPStackUsage) maxPStackUsage = psp;
 
-    if (sp > MAXSTACKELEMS-50) stackOverflow("stack");
-    if (usp > MAXUSTACKELEMS-4) stackOverflow("update stack");
-    if (lsp > MAXLSTACKELEMS-4) stackOverflow("case stack");
-    if (psp > MAXPSTACKELEMS-4) stackOverflow("prim stack");
+    if (sp  < 0 || sp  > MAXSTACKELEMS-50) stackOverflow("stack");
+    if (usp < 0 || usp > MAXUSTACKELEMS-4) stackOverflow("update stack");
+    if (lsp < 0 || lsp > MAXLSTACKELEMS-4) stackOverflow("case stack");
+    if (psp < 0 || psp > MAXPSTACKELEMS-4) stackOverflow("prim stack");
     if (hp > MAXHEAPAPPS-200 && canCollect()) collect();
 
     /* Trace */
@@ -1132,7 +1028,7 @@ void dispatch()
             showAtom(stack[i]);
             putchar(' ');
         }
-        //printf("\n");
+        printf("\n");
 
         //printf("PrimStack :");
         //for (int i = psp - 1; i >= 0; --i) {
@@ -1140,11 +1036,12 @@ void dispatch()
         //    putchar(' ');
         //}
 
-        //printf("UStack:");
-        //for (int i = usp-1; i >= 0; --i) {
-        //    printf(" %d-h%d", ustack[i].saddr, ustack[i].haddr);
-        //}
-        //printf("\n");
+        printf("UStack:");
+        printf(" |%d| ", usp);
+        for (int i = usp-1; i >= 0; --i) {
+            printf("%d-h%d-%d, ", ustack[i].saddr, ustack[i].haddr, ustack[i].discard);
+        }
+        printf("\n");
 
         //printf("Regs  :");
         //for (int i = 0; i < MAXREGS; ++i) {
@@ -1153,11 +1050,12 @@ void dispatch()
         //}
         //printf("\n");
 
-        //printf("LStack:");
-        //for (int i = lsp-1; i >= 0; --i) {
-        //    printf(" %d", lstack[i]);
-        //}
-        //printf("\n");
+        printf("LStack:");
+        for (int i = lsp-1; i >= 0; --i) {
+            printf(" ");
+            showAlt(lstack[i]);
+        }
+        printf("\n");
 
         //for (int i = 0; i < MAXREGS; ++i)
         //    refcntcheck(registers[i]);
@@ -1167,19 +1065,24 @@ void dispatch()
 
     top = stack[sp-1];
     if (top.tag == VAR) {
+      if (tracingEnabled) printf("STEP: Dereference h%d", top.contents.var.id);
       heapUtilCount++;
-      unwind(top.contents.var.shared, top.contents.var.id);
+      unwind(isShared(top), top.contents.var.seq, top.contents.var.par, top.contents.var.id);
       unwindCount++;
     }
     else if (usp > 0 && updateCheck(top, ustack[usp-1])) {
-      update(top, ustack[usp-1].saddr, ustack[usp-1].haddr);
+      if (tracingEnabled) printf("STEP: Update h%d", ustack[usp-1].haddr);
+      update(top, ustack[usp-1].saddr, ustack[usp-1].haddr, ustack[usp-1].discard);
       updateCount++;
     }
     else {
       switch (top.tag) {
-        case NUM: applyPrim(); break;
+        case NUM: 
+		  applyPrim();
+		  break;
         case FUN: profTable[top.contents.fun.id].callCount++; applyCount++;
-                  tmpl = tcachedRead(top.contents.fun.id);
+                  if (tracingEnabled) printf("STEP: Apply %s", code[top.contents.fun.id].name);
+                  tmpl = code[top.contents.fun.id];
                   apply(&tmpl); break;
         case CON: selectCount++;
                   caseSelect(top.contents.con.index);
@@ -1207,7 +1110,7 @@ void strToPrim(Char *s, Prim *p, Bool *b)
   *b = 0;
   if (!strcmp(s, "emit")) { *p = EMIT; return; }
   if (!strcmp(s, "emitInt")) { *p = EMITINT; return; }
-  if (!strcmp(s, "(!)")) { *p = SEQ; return; }
+  if (!strcmp(s, "unwrap")) { *p = UNWRAP; return; }
   if (!strncmp(s, "swap:", 5)) {
     *b = 1;
     s = s+5;
@@ -1226,6 +1129,8 @@ void strToPrim(Char *s, Prim *p, Bool *b)
 Bool parseAtom(FILE *f, Atom* result)
 {
   Char str[16];
+  Char strSeq[6];
+  Char strPar[7];
 
   return (
     (  fscanf(f, " INT%*[ (]%i)", &result->contents.num) == 1
@@ -1233,14 +1138,18 @@ Bool parseAtom(FILE *f, Atom* result)
     && perform(result->tag = NUM)
     )
     ||
-    (  fscanf(f, " ARG %5s%*[ (]%i)", str, &result->contents.arg.index) == 2
+    (  fscanf(f, " ARG %5s%*[ (]%5s%*[ (]%5s%*[ (]%i)))", str, strSeq, strPar, &result->contents.arg.index) == 4
     && perform(result->tag = ARG)
     && perform(result->contents.arg.shared = strToBool(str))
+    && perform(result->contents.arg.seq = strToBool(strSeq))
+    && perform(result->contents.arg.par = strToBool(strPar))
     )
     ||
-    (  fscanf(f, " VAR %5s%*[ (]%i)", str, &result->contents.var.id) == 2
+    (  fscanf(f, " VAR %5s%*[ (]%5s%*[ (]%5s%*[ (]%i)))", str, strSeq, strPar, &result->contents.var.id) == 4
     && perform(result->tag = VAR)
     && perform(result->contents.var.shared = strToBool(str))
+    && perform(result->contents.var.seq = strToBool(strSeq))
+    && perform(result->contents.var.par = strToBool(strPar))
     )
     ||
     (  fscanf(f, " REG %5s%*[ (]%i)", str, &result->contents.reg.index) == 2
@@ -1366,9 +1275,11 @@ Bool parseString(FILE *f, Int n, Char *str)
 Bool parseTemplate(FILE *f, Template *t)
 {
   Char c;
+  Char str[16];
   if (fscanf(f, " (") != 0) return 0;
   if (parseString(f, NAMELEN, t->name) == 0) return 0;
   if (fscanf(f, " ,%i,", &t->arity) != 1) return 0;
+  if (fscanf(f, "%[^,],", str) != 1) return 0; // throw away spark info
   t->numLuts = parseLuts(f, MAXLUTS, t->luts);
   if (!(fscanf(f, " %c", &c) == 1 && c == ',')) error("Parse error");
   t->numPushs = parseAtoms(f, MAXPUSH, t->pushs);
@@ -1460,7 +1371,12 @@ int main(int argc, char *argv[])
   ticks = swapCount + primCount + applyCount + unwindCount + updateCount + heapWaitCount + inlineAltCount;
   if (verbose) {
       printf("\n==== EXECUTION REPORT ====\n");
-      printf("Result      = %12i\n", stack[0].contents.num);
+      printf("Result      =");
+      for (int i = sp-1; i >= 1; --i) {
+        printf(" ");
+        showAtom(stack[i]);
+      }
+      printf("\n");
       printf("Ticks       = %12lld\n", ticks);
       printf("Swap        = %11lld%%\n", (100*swapCount)/ticks);
       printf("Prim        = %11lld%%\n", (100*primCount)/ticks);
@@ -1474,21 +1390,26 @@ int main(int argc, char *argv[])
       printf("#Cases      = %12lld\n", caseCount);
       printf("#Templates  = %12d\n", numTemplates);
       printf("#Allocs     = %12lld\n", heapAllocCount);
-      printf("#ImmediateFrees = %12lld\n", immediateFreeCount);
+      printf("#Deallocs   = %12lld\n", immediateFreeCount);
       printf("Heap Util   = %11lld%%\n", (100*heapUtilCount)/(ticks*MAXAPS));
       printf("Max Heap    = %12d\n", maxHeapUsage);
       printf("Max Stack   = %12d\n", maxStackUsage);
       printf("Max UStack  = %12d\n", maxUStackUsage);
       printf("Max LStack  = %12d\n", maxLStackUsage);
       printf("Max PStack  = %12d\n", maxPStackUsage);
-      if (cacheHits + cacheMisses > 0)
-        printf("Cache hit   = %11lld%%\n", 100 * cacheHits / (cacheHits+cacheMisses));
-      if (tcacheHits + tcacheMisses > 0)
-        printf("TCache hit   = %11lld%%\n", 100 * tcacheHits / (tcacheHits+tcacheMisses));
       printf("==========================\n");
   }
-  else
-    printf("(%d,%lld)\n", stack[0].contents.num, ticks);
+  else {
+
+    printf("(");
+    for (int i = sp-1; i >= 1; --i) {
+      showAtom(stack[i]);
+      if (i>1)
+        printf(" ");
+    }
+    printf(", %lld)\n", ticks);
+
+  }
 
   if (profiling)
       displayProfTable();

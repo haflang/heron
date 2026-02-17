@@ -1,11 +1,12 @@
 {-|
 
-An unsafe primitive for Xilinx UltraRam/BlockRam.
+A primitive for Xilinx UltraRam/BlockRam.
 
 This is a true dual-port RAM with some extra restrictions:
   + Both ports share a clock and a global enable
   + Only @NO_EFFECT@ mode is supported
   + Memory is uninitialised on restart
+  + Port A is performed before port B(?)
 
 We reuse Clash's @Clash.Explicit.BlockRam.trueDualPortRam@ simulation code,
 while only providing our own verilog template for UltraRam inference. The
@@ -20,14 +21,17 @@ module Heron.Primitives.DualPortRam
   ( RamArch(..)
   , dpRamE
   , dpRam
+  , testBench
   ) where
 
 import           Clash.Annotations.Primitive
 import qualified Clash.Explicit.BlockRam        as E
 import           Clash.Prelude
+import qualified Data.List                      as L
 import           Data.Maybe                     (fromMaybe)
 import           Data.String.Interpolate        (i)
 import           Data.String.Interpolate.Util   (unindent)
+import           GHC.Stack                      (HasCallStack)
 import qualified Heron.Primitives.UltraRamModel as U
 
 {-# ANN dpRamE# (InlineYamlPrimitive [Verilog] $ unindent [i|
@@ -93,6 +97,7 @@ import qualified Heron.Primitives.UltraRamModel as U
 
 dpRamE# ::
   forall nAddrs dom a .
+  -- ( HasCallStack
   ( KnownNat nAddrs
   , KnownDomain dom
   , NFDataX a
@@ -113,17 +118,14 @@ dpRamE# ::
   -> (Signal dom a, Signal dom a)
   -- ^ Outputs data on /next/ cycle. When writing, the data written
   -- will be echoed. When reading, the read data is returned.
-dpRamE# "ultra" clk en weA addrA datA weB addrB datB =
-  U.trueDualPortBlockRam# clk en weA addrA datA clk en weB addrB datB
-dpRamE# !_ clk en weA addrA datA weB addrB datB =
-  -- unbundle . (\rest -> (errorX "Uninitialised UltraRam data") :- rest) . bundle $
-  E.trueDualPortBlockRam# clk en weA addrA datA clk en weB addrB datB
+dpRamE# !_ clk en weA addrA datA = E.trueDualPortBlockRam# clk en weA addrA datA clk en
 {-# NOINLINE dpRamE# #-}
 
 -- | A Xilinx dual-port memory primitive with explicit clock & enable
 dpRamE ::
   forall nAddrs dom a .
-  ( KnownNat nAddrs
+  ( HasCallStack
+  , KnownNat nAddrs
   , KnownDomain dom
   , NFDataX a
   )
@@ -141,10 +143,12 @@ dpRamE ::
   -- ^ Data outputs. When reading, the read data is returned. When writing, the
   -- previous data is latched.
 dpRamE arch clk en opA opB =
-  dpRamE# (show arch) clk (fromEnable en)
+  prim (show arch) clk (fromEnable en)
     (isWr <$> opA) (maybeToX . getAddr <$> opA) (maybeToX . getData <$> opA)
     (isWr <$> opB) (maybeToX . getAddr <$> opB) (maybeToX . getData <$> opB)
   where
+    prim | arch == UltraRam = U.ultraRam#
+         | otherwise        = dpRamE#
     isWr (RamWrite _ _) = True
     isWr _              = False
     maybeToX = fromMaybe undefined
@@ -152,7 +156,8 @@ dpRamE arch clk en opA opB =
 -- | A Xilinx dual-port memory primitive with hidden clock, reset, and enable
 dpRam ::
   forall nAddrs dom1 a .
-  ( KnownNat nAddrs
+  ( HasCallStack
+  , KnownNat nAddrs
   , HiddenClockResetEnable dom1
   , NFDataX a
   )
@@ -172,6 +177,7 @@ data RamArch
   = UltraRam -- ^ UltraRAM based
   | BlockRam -- ^ BlockRAM based (with constraints equivalent to UltraRAM)
   | DistRam  -- ^ Distributed memory
+  deriving Eq
 
 instance Show RamArch where
   show UltraRam = "ultra"
@@ -187,3 +193,13 @@ getData :: RamOp n a -> Maybe a
 getData (RamWrite _ d) = Just d
 getData (RamRead  _  ) = Nothing
 getData RamNoOp        = Nothing
+
+testBench :: [(Int,Int)]
+testBench = L.drop 1 $ simulateN @System (1+L.length inp) (bundle . uncurry (dpRam BlockRam) . unbundle) inp
+  where
+    inp :: [(RamOp 10 Int, RamOp 10 Int)]
+    inp = [ (RamWrite 0 99, RamWrite 1 98)
+          , (RamRead  0   , RamRead 0    )
+          , (RamWrite 1 97, RamWrite 1 96)
+          ]
+-- Our model for BRAM does not allow R/W, W/R, or W/W collisions. Should be safe for RTL simulation

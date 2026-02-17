@@ -1,0 +1,6 @@
+gallery.aux*
+svg-inkscape
+tikz/*.dpth
+tikz/*.log
+tikz/*.pdf
+tikz/*.md5

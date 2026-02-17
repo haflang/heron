@@ -3,49 +3,67 @@
 #include <iostream>
 #include <fstream>
 #include <bitset>
+#include <unistd.h>
 
 using namespace std;
 
-// Here are our interface lists for _one_ configuration... how to do we
-// automatically generalise for the code data and gc threshold widths?
-#define TEMPLATE_SZ 326
-#define GC_THRES 1000
-#define WORDS_PER_TEMPLATE 11
-#define ERR_HEAP_FULL 0x27ffc
+// Architecture configuration
+#define TEMPLATE_SZ 337
+#define GC_THRES 122
+#define HEAP_SIZE (8*1024)
+#define ATOM_WIDTH 18
+#define INT_WIDTH 15
+
+// Derived helpers
+#define CDIV(x,y) (x/y + (x % y != 0))
+#define WORDS_PER_TEMPLATE (CDIV(TEMPLATE_SZ,32))
+#define IS_ERR(x) (!(x & (1<<ATOM_WIDTH)))
+#define ATOM_MASK ((1<<ATOM_WIDTH)-1)
+#define INT_MASK ((1<<INT_WIDTH)-1)
+#define GET_ERR(x) (x&ATOM_MASK)
+#define GET_INT(x) (x&INT_MASK)
+#define WAIT_CYCLES(x) for (int i=0; i<(x); i++){ top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
 
 vluint64_t main_time = 1;       // Current simulation time
 
-void reset(VtopEntity *top) {
+// Print usage
+void usage() {
+  cout << "Simulate the Siege core hardware with verilator" << endl << endl
+       << "Usage: heron-verilated"            << endl
+       << "  [-g int] (GC trigger threshold)" << endl
+       << "  [-r int] (Reset delay before `go` signal)"  << endl
+       << "  [-d int] (Delay before reset)"  << endl
+       << "  file1 ... fileN (Template binaries to run)" << endl << endl
+       << "Generate the template binaries using `heron -d <flite_src>.fl`" << endl;
+}
+
+// Reset the hardware
+void reset(VtopEntity *top, int gc_thres, int wait) {
 
   // Steady inputs
   top->codeWE = 0;
   top->codeAddr = 0;
   top->go       = 0;
-  top->gcThres  = GC_THRES;
+  top->unlock   = 0;
+  top->gcThres  = gc_thres;
   top->en       = 1;
 
-  // Raise reset
-  top->rst      = 1;
-  for(int i=0; i<=30; i++){
-    top->clk = 0;
-    top->eval();
-    top->clk = 1;
-    top->eval();
-  }
+  // Wait before reset
+  WAIT_CYCLES(wait);
 
-  // Lower reset
+  // Raise reset until everything is reset
+  top->rst = 1;
+  WAIT_CYCLES(HEAP_SIZE+3);
+
+  // Lower reset for a few cycles
   top->rst = 0;
-  for(int i=0; i<=30; i++){
-    top->clk = 0;
-    top->eval();
-    top->clk = 1;
-    top->eval();
-  }
+  WAIT_CYCLES(10);
 
   return;
 }
 
-void write_templates(VtopEntity *top, char *fname) {
+// Write a binary template file to the code memory and wait until `limit` cycles
+void write_templates(VtopEntity *top, char *fname, int limit) {
 
   // Load program binary over codeData/codeAddr
   ifstream f(fname);
@@ -69,102 +87,133 @@ void write_templates(VtopEntity *top, char *fname) {
     // Commit to template RAM
     top->codeWE = 1;
     top->codeAddr = t_addr;
+    WAIT_CYCLES(1);
+    t_addr++;
+  }
+
+  top->codeWE = 0;
+  top->codeAddr = 0;
+
+  // Wait until GC has initialised
+  while (i < limit) {
     top->clk = 0;
     top->eval();
     top->clk = 1;
     top->eval();
-    t_addr++;
+    i++;
   }
 
   return;
 }
 
+// Issue `go` signal
 void start(VtopEntity *top) {
 
   top->codeWE = 0;
   top->go = 1;
-
-  // Block until we see that the mutator has started
-  while (top->stats[3]==0) {
-    top->clk = 0;
-    top->eval();
-    top->clk = 1;
-    top->eval();
-  }
+  top->unlock = 1;
+  WAIT_CYCLES(1);
 
   top->go = 0;
-  top->eval();
   return;
 }
 
+// Report stats from the master core
 void report(VtopEntity *top) {
   int ret = top->ret;
-  int mutCycles = top->stats[3];
-  int gcRootCycles = top->stats[2];
-  int gcWaitCycles = top->stats[1];
-  int gcWorstStallCycles = top->stats[0];
+  int mutCycles          = top->stats[4];
+  int gcRootCycles       = top->stats[3];
+  int gcWaitCycles       = top->stats[2];
+  int gcWorstStallCycles = top->stats[1];
+  int ctxtCycles         = top->stats[0];
 
-  if (ret == ERR_HEAP_FULL)
-    cout << "Failed with ERR_HEAP_FULL" << endl;
+  if (IS_ERR(ret))
+    cout << "Failed with error code: " << GET_ERR(ret) << endl;
   else
-    cout << "Returned " << (ret & 0x7FFF) << endl;
+    cout << "Returned " << GET_INT(ret) << endl;
 
-  cout << "Mutator cycles = "          << mutCycles    << endl
-       << "GC root id cycles = "       << gcRootCycles << endl
-       << "GC wait cycles = "          << gcWaitCycles << endl
-       << "Worst GC stall duration = " << gcWorstStallCycles << endl;
+  cout << "Mutator cycles          = " << mutCycles          << endl
+       << "GC root id cycles       = " << gcRootCycles       << endl
+       << "GC wait cycles          = " << gcWaitCycles       << endl
+       << "Worst GC stall duration = " << gcWorstStallCycles << endl
+       << "Context switch cycles   = " << ctxtCycles         << endl
+       << "Raw return              = " << ret                << endl
+       << "Main_time               = " << main_time          << endl;
+
+  if (IS_ERR(ret))
+    exit(1);
+
   return;
 }
 
+// Print intermediate simulation stats
 void report_intermediate(VtopEntity *top) {
-  int ret = top->ret;
-  int mutCycles = top->stats[3];
-  int gcRootCycles = top->stats[2];
-  int gcWaitCycles = top->stats[1];
-  int gcWorstStallCycles = top->stats[0];
-
-  cout << "CTick "  << main_time
-       << " MUT "   << mutCycles
-       << " ROOTS " << gcRootCycles
-       << " WAITS " << gcWaitCycles
-       << " STALL " << gcWorstStallCycles
-       << "\t\r"    << flush;
+  cout << "\t\r"    
+       << "CTick "  << main_time
+       << flush;
   return;
 }
 
-int main(int argc, char **argv) {
-
-  if (argc != 2) {
-    cout << "Usage: " << argv[0] << " <template_bin_file>" << endl;
-    cout << "Generate the template file using `heron -d <flite_src>.fl`" << endl;
-    return EXIT_FAILURE;
-  }
-
-  //Verilated::commandArgs(argc, argv);
-  printf("Starting simulation...\n");
-
-  VtopEntity *top = new VtopEntity;
-
-  reset(top);
-  cout << "Finished reset" << endl;
-
-  write_templates(top, argv[1]);
+// Run simulation until we get a result
+void sim(VtopEntity *top, int limit, char *fname) {
+  main_time=1;
+  write_templates(top, fname, limit);
   cout << "Finished template initialisation" << endl;
-
   start(top);
   cout << "Waiting for result" << endl;
 
-  while(!top->retVld) {
-    report_intermediate(top);
-    top->clk = 0;
-    top->eval();
-    top->clk = 1;
-    top->eval();
+  int countdown = 0;
+  while(!top->retVld || main_time < 5) { // Give it a little grace period to
+                                         // reset the result register
+    if (countdown==0){
+      countdown=5000;
+      report_intermediate(top);
+    }
+    countdown--;
+    WAIT_CYCLES(1);
     main_time++;
   }
   cout << endl;
 
   report(top);
+}
+
+// Main loop
+int main(int argc, char **argv) {
+
+  int gc_thres = GC_THRES;
+  int limit = HEAP_SIZE/2-1;
+  int wait = 10;
+  int opt;
+  int iter=1;
+  VtopEntity *top = new VtopEntity;
+
+  while ((opt = getopt(argc, argv, "g:r:d:")) != -1) {
+    switch (opt) {
+      case 'g':
+        gc_thres = atoi(optarg);
+        top->gcThres  = gc_thres;
+        break;
+      case 'r':
+        limit = atoi(optarg);
+        break;
+      case 'd':
+        wait = atoi(optarg);
+        break;
+      default:
+        usage();
+        return 1;
+    }
+  }
+
+  // Run any template files
+  for (int i = optind; i < argc; i++) {
+    cout << "Run " << iter++ << ": " << argv[i] << endl;
+
+    reset(top, gc_thres, wait);
+    sim(top, limit, argv[i]);
+  }
+
   top->final();
   delete top;
   return EXIT_SUCCESS;

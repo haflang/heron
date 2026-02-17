@@ -1,11 +1,9 @@
 module Flite.LambdaLift (lambdaLift) where
 
-import Flite.Pretty --temp
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.WriterState
-import Control.Monad
+import           Flite.Descend
+import           Flite.Syntax
+import           Flite.Traversals
+import           Flite.WriterState
 
 -- Introduces functions of the form "f^N" where is is a natural
 -- number.  Therefore assumes function identifiers do not already

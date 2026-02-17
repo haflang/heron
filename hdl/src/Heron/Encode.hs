@@ -26,31 +26,40 @@ inRange n = let nmax = fromIntegral $ toInteger (maxBound :: a)
             in n >= nmin && n <= nmax
 
 encOpcode :: String -> T.OpCode
-encOpcode "(+)"  = T.OpAdd
-encOpcode "(-)"  = T.OpSub
-encOpcode "(==)" = T.OpEq
-encOpcode "(/=)" = T.OpNeq
-encOpcode "(<=)" = T.OpLeq
-encOpcode "(!)"  = T.OpSeq
-encOpcode f      = error $ "Encode.encOpcode: Invalid primitive op " ++ f
+encOpcode "(+)"    = T.OpAdd
+encOpcode "(-)"    = T.OpSub
+encOpcode "(==)"   = T.OpEq
+encOpcode "(/=)"   = T.OpNeq
+encOpcode "(<=)"   = T.OpLeq
+encOpcode "unwrap" = T.OpUnwrap
+encOpcode f        = error $ "Encode.encOpcode: Invalid primitive op " ++ f
 
 encAtom :: Atom -> T.Atom
 encAtom (INT n)
   | inRange @T.PInt n
   = T.PrimInt $ fromIntegral n
-encAtom (ARG s n)
+encAtom (ARG s doSeq doPar n)
   | inRange @T.ArgIndex n
-  = T.Arg s $ fromIntegral n
-encAtom (VAR s n)
+  = T.Arg tag $ fromIntegral n
+  where
+    tag | doPar     = T.PPar
+        | doSeq     = T.PSeq
+        | s         = T.PShared
+        | otherwise = T.PUniq
+encAtom (VAR s doSeq doPar n)
   | inRange @T.HeapAddr n' &&
     n <  C.snatToNum (C.SNat @MaxAps) &&
     n >= negate (C.snatToNum $ C.SNat @MaxApSpan)
-  = T.Ptr s $ fromIntegral n'
+  = T.Ptr tag $ fromIntegral n'
   where
     -- Negative relative offsets are all allowed for reference between split
     -- templates. If we alter encoding now, this resolves silently in the circuit
     n' = if n < 0 then n + 1 + fromIntegral (maxBound :: T.HeapAddr)
                   else n
+    tag | doPar     = T.PPar
+        | doSeq     = T.PSeq
+        | s         = T.PShared
+        | otherwise = T.PUniq
 encAtom (REG s n)
   | inRange @T.RegIndex n
   = T.Reg s $ fromIntegral n
@@ -94,7 +103,7 @@ encCaseTable (LOffset addr)
   | otherwise
   = error "Encode.encCaseTable: offset address too large"
 encCaseTable (LInline [altA])
-  = T.CTInline (encAlt altA) (encAlt (0, CON 0 0))
+  = T.CTInline (encAlt altA) (encAlt altA)
 encCaseTable (LInline [altA, altB])
   = T.CTInline (encAlt altA) (encAlt altB)
 encCaseTable ct = error $ "Encode.encCaseTable: too many inline alternatives" ++ show ct
@@ -104,7 +113,7 @@ encAlt (p, INT val)
   | inRange @T.FnArity p &&
     inRange @T.ShortInt val
   = T.AInt (fromIntegral p) (fromIntegral val)
-encAlt (p, ARG _ idx)
+encAlt (p, ARG  _ _ _ idx)
   | inRange @T.FnArity p &&
     inRange @T.ArgIndex idx
   = T.AArg (fromIntegral p) (fromIntegral idx)
@@ -153,7 +162,7 @@ encSpineApp alts spineAp
                          (encAtoms spineAp)
 
 encTemplate :: Template -> T.Template
-encTemplate (_, arity, alts, spineAp, heapAps)
+encTemplate (_, arity, _spark, alts, spineAp, heapAps)
   | inRange @T.PushOffset pushOffset               &&
     all (inRange @T.NodeArity . appLen) heapAps    &&
     length alts <= 1                               &&
@@ -171,8 +180,8 @@ encTemplate t
 checkMaxAps :: [Template] -> Bool
 checkMaxAps templs = all ok fns
   where
-    name (n, _, _, _, _) = n
-    aps  (_, _, _, _, a) = a
+    name (n, _, _, _, _, _) = n
+    aps  (_, _, _, _, _, a) = a
     fns = groupBy (\a b -> name a == name b) $
           sortBy  (\a b -> compare (name a) (name b)) templs
     ok fn
@@ -194,7 +203,7 @@ encProg templs
   | otherwise
   = let templs' = map encTemplate templs
         mainAddr = fromMaybe (error "Encode.encProgram: No main template in program")
-                             (findIndex (\(n,_,_,_,_) -> n=="main") templs)
+                             (findIndex (\(n,_,_,_,_,_) -> n=="main") templs)
     in (fromIntegral mainAddr, templs')
 
 -- | Dump a set of Heron templates as bit vectors for interoperability.

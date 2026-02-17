@@ -1,8 +1,8 @@
 module Flite.Identify where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
+import           Flite.Descend
+import           Flite.Syntax
+import           Flite.Traversals
 
 -- Rewrites (Var n) to (Fun n) where n refers to a function.
 
@@ -17,5 +17,5 @@ identifyFuncs p =
     fun vs (Let bs e) =
       let ws = vs ++ map fst bs
       in  Let [(v, fun ws e) | (v, e) <- bs] (fun ws e)
-    fun vs (Var v) | v `elem` fs && v `notElem` vs = Fun v
+    fun vs (Var v) | (v `elem` fs || isPrimId v) && v `notElem` vs = Fun v
     fun vs e = descend (fun vs) e

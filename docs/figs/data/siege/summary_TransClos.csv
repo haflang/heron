@@ -1,0 +1,4 @@
+cores,bench,cycles,total,speedup,ideal
+1,TransClos,259628983.0,2.59628983,1.00,1.00
+2,TransClos,142603458.0,1.42603458,1.82,0.91
+24,TransClos,0.0,nan,nan,nan

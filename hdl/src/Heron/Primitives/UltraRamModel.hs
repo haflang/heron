@@ -1,14 +1,4 @@
-{-|
-Copyright  :  (C) 2023, QBayLogic B.V.
-License    :  BSD2 (see the file LICENSE)
-Maintainer :  QBayLogic B.V. <devops@qbaylogic.com>
-
-Configurable model for true dual-port block RAM
--}
-
 {-
-This is a lightly modified version of the original Clash source.
-We ignore conflicts and perform port A operations before port B.
 
 -}
 
@@ -16,110 +6,168 @@ We ignore conflicts and perform port A operations before port B.
 {-# LANGUAGE CPP          #-}
 {-# LANGUAGE GADTs        #-}
 {-# LANGUAGE MagicHash    #-}
+{-# LANGUAGE QuasiQuotes  #-}
 
 module Heron.Primitives.UltraRamModel
- (trueDualPortBlockRam#) where
+ (ultraRam#, topEntity) where
 
+import           Clash.Annotations.Primitive
+import           Clash.Annotations.TH
 import           Clash.Explicit.Prelude
-import           Clash.Signal.Internal  (Signal ((:-)))
-import           Data.Maybe             (fromMaybe)
-import           Data.Sequence          (Seq)
-import qualified Data.Sequence          as Seq
-import           Data.Tuple             (swap)
-import           GHC.Stack              (HasCallStack)
+import           Clash.Signal.Internal        (Signal ((:-)))
+import           Data.Either                  (isRight)
+import           Data.Sequence                (Seq)
+import qualified Data.Sequence                as Seq
+import           Data.String.Interpolate      (i)
+import           Data.String.Interpolate.Util (unindent)
+import           GHC.Stack                    (HasCallStack)
 
--- | Primitive of 'Heron.Primitives.trueDualPortBlockRam'.
-trueDualPortBlockRam# ::
-  forall nAddrs domA domB a .
-  ( HasCallStack
-  , KnownNat nAddrs
-  , KnownDomain domA
-  , KnownDomain domB
+{-# ANN ultraRam# (InlineYamlPrimitive [Verilog] $ unindent [i|
+ BlackBox:
+    name: Heron.Primitives.UltraRamModel.ultraRam#
+    kind: Declaration
+    type: |-
+      ultraRamE# ::
+        forall nAddrs dom a .
+        ( KnownNat nAddrs              ~ARG[0]
+        , KnownDomain dom              ~ARG[1]
+        , NFDataX a                    ~ARG[2]
+        )
+        => String                      ~ARG[3]
+        -> Clock dom                   ~ARG[4]
+        -> Signal dom Bool             ~ARG[5]
+        -> Signal dom Bool             ~ARG[6]
+        -> Signal dom (Index nAddrs)   ~ARG[7]
+        -> Signal dom a                ~ARG[8]
+        -> Signal dom Bool             ~ARG[9]
+        -> Signal dom (Index nAddrs)   ~ARG[10]
+        -> Signal dom a                ~ARG[11]
+        -> (Signal dom a, Signal dom a)
+    template: |-
+      // ultraRamE# begin
+      (* ram_style = ~ARG[3] *) reg [~SIZE[~TYP[8]]-1:0] ~GENSYM[mem][0] [~LIT[0]-1:0];
+      wire ~SIGD[~GENSYM[outAr][1]][8];
+      wire ~SIGD[~GENSYM[outBr][2]][11];
+      reg ~SIGD[~GENSYM[fwd][3]][5];
+      reg ~SIGD[~GENSYM[fwdData][4]][8];
+      reg ~SIGD[~GENSYM[prevA][5]][8];
+      reg ~SIGD[~GENSYM[prevB][6]][11];
+      reg ~SIGD[~GENSYM[rdA][7]][8];
+      reg ~SIGD[~GENSYM[rdB][8]][11];
+      reg ~SIGD[~GENSYM[latchA][9]][8];
+      reg ~SIGD[~GENSYM[latchB][10]][11];
+
+      // Port A
+      always @(~IF~ACTIVEEDGE[Rising][1]~THENposedge~ELSEnegedge~FI ~ARG[4]) begin
+          if(~ARG[5]) begin
+              if(~ARG[6])
+                  ~SYM[0][~IF~SIZE[~TYP[7]]~THEN~ARG[7]~ELSE0~FI] <= ~ARG[8];
+              else
+                  ~SYM[7] <= ~SYM[0][~IF~SIZE[~TYP[7]]~THEN~ARG[7]~ELSE0~FI];
+          end
+      end
+      // Port B
+      always @(~IF~ACTIVEEDGE[Rising][1]~THENposedge~ELSEnegedge~FI ~ARG[4]) begin
+          if(~ARG[5]) begin
+              if(~ARG[9])
+                  ~SYM[0][~IF~SIZE[~TYP[10]]~THEN~ARG[10]~ELSE0~FI] <= ~ARG[11];
+              else
+                  ~SYM[8] <= ~SYM[0][~IF~SIZE[~TYP[10]]~THEN~ARG[10]~ELSE0~FI];
+          end
+      end
+
+      // Additional latching and forwarding for correct simulation
+      always @(~IF~ACTIVEEDGE[Rising][1]~THENposedge~ELSEnegedge~FI ~ARG[4]) begin
+            ~SYM[9]  <= !~ARG[6] && (^~ARG[7]  !== 1'bX);
+            ~SYM[10] <= !~ARG[9] && (^~ARG[10] !== 1'bX);
+            ~SYM[5] <= ~SYM[1];
+            ~SYM[6] <= ~SYM[2];
+            ~SYM[3] <= ~ARG[6] && !~ARG[9] && ~ARG[7] === ~ARG[10];
+            ~SYM[4] <= ~ARG[8];
+      end
+
+      assign ~SYM[1] = ~SYM[9] ? ~SYM[7] : ~SYM[5];
+      assign ~SYM[2] = ~SYM[3] ? ~SYM[4] : (~SYM[10] ? ~SYM[8] : ~SYM[6]);
+      assign ~RESULT = {~SYM[1], ~SYM[2]};
+      // end ultraRamE#
+|]) #-}
+
+-- | Primitive of 'Heron.Primitives.ultraRam'.
+ultraRam# ::
+  forall nAddrs dom a .
+  -- ( HasCallStack -- Removed so we don't have to rewrite URAM verilog template
+  ( KnownNat nAddrs
+  , KnownDomain dom
   , NFDataX a
   )
-  => Clock domA
-  -- ^ Clock for port A
-  -> Signal domA Bool
-  -- ^ Enable for port A
-  -> Signal domA Bool
+  => String
+  -> Clock dom
+  -- ^ Clock
+  -> Signal dom Bool
+  -- ^ Enable
+
+  -> Signal dom Bool
   -- ^ Write enable for port A
-  -> Signal domA (Index nAddrs)
+  -> Signal dom (Index nAddrs)
   -- ^ Address to read from or write to on port A
-  -> Signal domA a
+  -> Signal dom a
   -- ^ Data in for port A; ignored when /write enable/ is @False@
 
-  -> Clock domB
-  -- ^ Clock for port B
-  -> Signal domB Bool
-  -- ^ Enable for port B
-  -> Signal domB Bool
+  -> Signal dom Bool
   -- ^ Write enable for port B
-  -> Signal domB (Index nAddrs)
+  -> Signal dom (Index nAddrs)
   -- ^ Address to read from or write to on port B
-  -> Signal domB a
+  -> Signal dom a
   -- ^ Data in for port B; ignored when /write enable/ is @False@
 
-  -> (Signal domA a, Signal domB a)
+  -> (Signal dom a, Signal dom a)
   -- ^ Outputs data on /next/ cycle. If write enable is @True@, the data written
   -- will be echoed. If write enable is @False@, the read data is returned. If
   -- port enable is @False@, it is /undefined/.
-trueDualPortBlockRam# clkA enA weA addrA datA clkB enB weB addrB datB
-  | snatToNum @Int (clockPeriod @domA) < snatToNum @Int (clockPeriod @domB)
-  = swap (trueDualPortBlockRamModel labelB clkB enB weB addrB datB labelA clkA enA weA addrA datA)
-  | otherwise
-  =       trueDualPortBlockRamModel labelA clkA enA weA addrA datA labelB clkB enB weB addrB datB
+ultraRam# !_ clk en weA addrA datA
+  = ultraRamModel clk en labelA weA addrA datA labelB
  where
   labelA = "Port A"
   labelB = "Port B"
+{-# NOINLINE ultraRam# #-}
 
 
--- | Haskell model for the primitive 'trueDualPortBlockRam#'.
---
--- Warning: this model only works if @domFast@'s clock is faster (or equal to)
--- @domSlow@'s clock.
-trueDualPortBlockRamModel ::
-  forall nAddrs domFast domSlow a .
+-- | Haskell model for the primitive 'ultraRam#'.
+ultraRamModel ::
+  forall nAddrs dom a .
   ( HasCallStack
   , KnownNat nAddrs
-  , KnownDomain domSlow
-  , KnownDomain domFast
+  , KnownDomain dom
   , NFDataX a
+  , dom ~ dom
   ) =>
+  Clock dom ->
+  Signal dom Bool ->
 
   String ->
-  Clock domSlow ->
-  Signal domSlow Bool ->
-  Signal domSlow Bool ->
-  Signal domSlow (Index nAddrs) ->
-  Signal domSlow a ->
+  Signal dom Bool ->
+  Signal dom (Index nAddrs) ->
+  Signal dom a ->
 
   String ->
-  Clock domFast ->
-  Signal domFast Bool ->
-  Signal domFast Bool ->
-  Signal domFast (Index nAddrs) ->
-  Signal domFast a ->
+  Signal dom Bool ->
+  Signal dom (Index nAddrs) ->
+  Signal dom a ->
 
-  (Signal domSlow a, Signal domFast a)
-trueDualPortBlockRamModel labelA !_clkA enA weA addrA datA labelB !_clkB enB weB addrB datB =
+  (Signal dom a, Signal dom a)
+ultraRamModel !_clk en labelA weA addrA datA labelB weB addrB datB =
   ( startA :- outA
   , startB :- outB )
  where
   (outA, outB) =
     go
       (Seq.fromFunction (natToNum @nAddrs) initElement)
-      0 -- ensure 'go' hits fast clock first for 1 cycle, then execute slow
-         -- clock for 1 cycle, followed by the regular cadence of 'ceil(tA / tB)'
-         -- cycles for the fast clock followed by 1 cycle of the slow clock
-      (bundle (enA, weA, fromIntegral <$> addrA, datA))
-      (bundle (enB, weB, fromIntegral <$> addrB, datB))
+      (bundle (en, weA, fromIntegral <$> addrA, datA))
+      (bundle (en, weB, fromIntegral <$> addrB, datB))
       startA startB
 
-  tA = snatToNum @Int (clockPeriod @domSlow)
-  tB = snatToNum @Int (clockPeriod @domFast)
-
-  startA = deepErrorX $ "trueDualPortBlockRam: " <> labelA <> ": First value undefined"
-  startB = deepErrorX $ "trueDualPortBlockRam: " <> labelB <> ": First value undefined"
+  startA = errorX $ unwords ["ultraRam:", labelA, ": First value undefined"]
+  startB = errorX $ unwords ["ultraRam:", labelB, ": First value undefined"]
 
   initElement :: Int -> a
   initElement n =
@@ -164,55 +212,42 @@ trueDualPortBlockRamModel labelA !_clkA enA weA addrA datA labelB !_clkB enB weB
 
   go ::
     Seq a ->
-    Int ->
     Signal domSlow (Bool, Bool, Int, a) ->
     Signal domFast (Bool, Bool, Int, a) ->
     a -> a ->
     (Signal domSlow a, Signal domFast a)
-  go ram0 relativeTime as0 bs0 =
-    case compare relativeTime 0 of
-      LT -> goSlow
-      EQ -> goBoth
-      GT -> goFast
+  go ram0 as0 bs0 prevA prevB =
+    outA2 `seqX` outB2 `seqX` (outA2 :- as2, outB2 :- bs2)
    where
     (enA_, weA_, addrA_, datA_) :- as1 = as0
     (enB_, weB_, addrB_, datB_) :- bs1 = bs0
 
-    goBoth prevA prevB = outA2 `seqX` outB2 `seqX` (outA2 :- as2, outB2 :- bs2)
-     where
+    (datA1_,datB1_) = (datA_,datB_)
 
-      (datA1_,datB1_) = (datA_,datB_)
+    (wroteA,ram1) = writeRam weA_ addrA_ datA1_ ram0
+    (wroteB,ram2) = writeRam weB_ addrB_ datB1_ ram1
 
-      (wroteA,ram1) = writeRam weA_ addrA_ datA1_ ram0
-      (wroteB,ram2) = writeRam weB_ addrB_ datB1_ ram1
+    outA1 = maybe (ram0 `Seq.index` addrA_) (const prevA) wroteA
 
-      outA1 = fromMaybe (ram0 `Seq.index` addrA_) wroteA
+    outB1 = maybe (ram1 `Seq.index` addrB_) (const prevB) wroteB
 
-      outB1 = fromMaybe (ram0 `Seq.index` addrB_) wroteB
+    outA2 = if enA_ && isRight (isX addrA_) then outA1 else prevA
+    outB2 = if enB_ && isRight (isX addrB_) then outB1 else prevB
 
-      outA2 = if enA_ then outA1 else prevA
-      outB2 = if enB_ then outB1 else prevB
-      (as2,bs2) = go ram2 (relativeTime - tB + tA) as1 bs1 outA2 outB2
+    (as2,bs2) = go ram2 as1 bs1 outA2 outB2
 
-    -- 1 iteration here, as this is the slow clock.
-    goSlow _ prevB | enA_ = out0 `seqX` (out0 :- as2, bs2)
-     where
-      (wrote, !ram1) = writeRam weA_ addrA_ datA_ ram0
-      out0 = fromMaybe (ram1 `Seq.index` addrA_) wrote
-      (as2, bs2) = go ram1 (relativeTime + tA) as1 bs0 out0 prevB
 
-    goSlow prevA prevB = (prevA :- as2, bs2)
-      where
-        (as2,bs2) = go ram0 (relativeTime + tA) as1 bs0 prevA prevB
+topEntity
+  :: "clk" ::: Clock System
+  -> "en"  ::: Signal System Bool
+  -> "weA" ::: Signal System Bool
+  -> "addrA" ::: Signal System (Index 1024)
+  -> "dataA" ::: Signal System (Unsigned 72)
+  -> "weB" ::: Signal System Bool
+  -> "addrB" ::: Signal System (Index 1024)
+  -> "dataB" ::: Signal System (Unsigned 72)
+  -> "out" ::: (Signal System (Unsigned 72), Signal System (Unsigned 72))
+topEntity = ultraRam# "ultra"
 
-    -- 1 or more iterations here, as this is the fast clock. First iteration
-    -- happens here.
-    goFast prevA _ | enB_ = out0 `seqX` (as2, out0 :- bs2)
-     where
-      (wrote, !ram1) = writeRam weB_ addrB_ datB_ ram0
-      out0 = fromMaybe (ram1 `Seq.index` addrB_) wrote
-      (as2, bs2) = go ram1 (relativeTime - tB) as0 bs1 prevA out0
-
-    goFast prevA prevB = (as2, prevB :- bs2)
-     where
-       (as2,bs2) = go ram0 (relativeTime - tB) as0 bs1 prevA prevB
+{-# NOINLINE topEntity #-}
+makeTopEntity 'topEntity

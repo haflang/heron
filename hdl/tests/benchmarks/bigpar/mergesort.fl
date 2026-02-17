@@ -1,0 +1,139 @@
+{-
+-- This is a bad implementation of half. The first list is reversed, but that's OK here.
+half xs = half' (length xs) [] xs
+
+half' n acc [] = (acc,[])
+half' n acc (x:xs) =
+  if n <= 0
+    then (acc, x:xs)
+    else half' (n-2) (x : acc) xs
+
+toTree xs =
+  let n = length xs
+  in if n <= 1
+       then Leaf (head xs)
+       else case half' n [] xs of
+         (as,bs) -> Node (toTree as) (toTree bs)
+
+merge [] ys = ys
+merge (x:xs) ys = case ys of
+  [] -> x:xs
+  (z:zs) -> if x <= z
+              then x : merge xs ys
+              else z : merge (x:xs) zs
+
+mergeSort (Leaf n) = [n]
+mergeSort (Node a b) =
+  let a' = mergeSort a
+      b' = mergeSort b
+  in merge a' b'
+
+mergeSortPar t xs =
+  if t == 0
+    then mergeSort xs
+    else case xs of
+      (Leaf n) -> n
+      (Node a b) ->
+        let t' = t - 1
+            a' = mergeSortPar t' a `using` evalList rseq
+            b' = mergeSortPar t' b `using` evalList rseq
+        in b' `par` merge a' b'
+
+main = let inp = toTree $ enumFromTo 0 1000
+           threshold = 3
+       in evalList rseq (mergeSortPar threshold inp) `seq` 0
+
+-}
+
+{-
+take2n n xs =
+  if n <= 0
+    then []
+    else case xs of
+           [] -> []
+           (y:ys) -> y : take2n (n-2) ys
+
+drop2n n xs =
+  if n <= 0
+    then xs
+    else case xs of
+           [] -> []
+           (y:ys) -> drop2n (n-2) ys
+
+merge [] ys = ys
+merge (x:xs) ys = case ys of
+  [] -> x:xs
+  (z:zs) -> if x <= z
+              then x : merge xs ys
+              else z : merge (x:xs) zs
+
+mergeSort xs = case xs of
+  [] -> []
+  (y:ys) -> case ys of
+    [] -> [y]
+    (z:zs) -> let n = length xs
+                  a' = mergeSort (take2n n xs)
+                  b' = mergeSort (drop2n n xs)
+               in merge a' b'
+
+mergeSortPar t xs =
+  if t == 0
+    then mergeSort xs
+    else case xs of
+      [] -> []
+      (y:ys) -> case ys of
+        [] -> [y]
+        (z:zs) -> let t' = t - 1
+                      n = length xs
+                      a' = mergeSortPar t' (take2n n xs) `using` evalList rseq
+                      b' = mergeSortPar t' (drop2n n xs) `using` evalList rseq
+                  in a' `par` merge b' a'
+
+main = let inp = enumFromTo 0 2000
+           threshold = 5
+       in evalList rseq (mergeSortPar threshold inp) `seq` 0
+-}
+
+
+
+-- This is a bad implementation of half. The first list is reversed, but that's OK here.
+half xs = half' (length xs) [] xs
+
+half' n acc [] = (acc,[])
+half' n acc (x:xs) =
+  if n <= 0
+    then (acc, x:xs)
+    else half' (n-2) (x : acc) xs
+
+merge [] ys = ys
+merge (x:xs) ys = case ys of
+  [] -> x:xs
+  (z:zs) -> if x <= z
+              then x : merge xs ys
+              else z : merge (x:xs) zs
+
+mergeSort xs = case xs of
+  [] -> []
+  (y:ys) -> case ys of
+    [] -> [y]
+    (z:zs) -> case half xs of
+                (a,b) -> let a' = mergeSort a
+                             b' = mergeSort b
+                         in merge a' b'
+
+mergeSortPar t xs =
+  if t == 0
+    then mergeSort xs
+    else case xs of
+      [] -> []
+      (y:ys) -> case ys of
+        [] -> [y]
+        (z:zs) -> case half xs of
+                    (a,b) -> let t' = t - 1
+                                 a' = mergeSortPar t' a `using` evalList rseq
+                                 b' = mergeSortPar t' b `using` evalList rseq
+                             in b' `par` merge a' b'
+
+main = let inp = enumFromTo 0 4000
+           threshold = 5
+       in evalList rseq (mergeSortPar threshold inp) `seq` 0

@@ -1,0 +1,106 @@
+-- ring size = parameter np
+-- wr2 :: Int -> Matrix Int -> Matrix Int
+wr2 = wr gphRing
+
+-- gph ring, simply by sparking all ring process outputs
+-- (granularity control by ring size)
+gphRing np splitIn combOut ringF input
+  = let ringIns = splitIn np input
+        -- xs = foldl' (gphRingFld ringF) ([],snd xs) ringIns
+        xs = foldWrap (gphRingFld ringF) xs ringIns
+        outs = fst xs
+    in combOut (outs `using` parList (evalList (evalList rseq)))
+
+foldWrap f acc xs = foldl' f ([],snd acc) ([] ++ xs)
+
+{- This is a similar hack
+to that in `transclos.fl` to force letrec into a suitable shape for a one-ported
+heap. The `[] ++` is just to push `foldWrap` over the size threshold that informs
+inlining. We need it to avoid inlining so that there is only a single recursive
+let bound application in the templates generated for `gphRing` -}
+
+gphRingFld ringF (outs',rIn) inp =
+  case ringF (inp,rIn) of
+    (out,rOut) -> (out:outs', rOut)
+
+-- type Matrix a = [[a]]
+-- dim :: Matrix a -> Int
+dim = length
+
+-- wr :: ring skel type -> Int -> Matrix Int -> Matrix Int
+wr ring np mat = ring np wrSplit concat wrRingf (mat,0) -- ring type issue, 0 is dummy parameter
+--           ((some rows,start),more rows)  -> ( result rows , rows for ring)
+-- wrRingf :: ((Matrix Int, Int), [[Int]] )  -> ( Matrix Int  ,   [[Int]])
+wrRingf ((rows,startrow), fromLeft) = create_procs (length $ head rows) startrow rows fromLeft
+
+--       ring size  all input    [ (some rows ,no. of 1st row)]
+-- wrSplit :: Int -> (Matrix Int, Int) -> [ (Matrix Int,    Int      )]
+wrSplit n (mat,a) =
+  let inputrows = splitIntoN n mat
+  in zip inputrows (scanl (+) 1 (map length inputrows))
+
+-- TODO implement scanl foldl'
+
+{-
+-- sequential version from Clean book
+warshall :: Int -> Matrix Int -> Matrix Int
+warshall  _ mat = solution
+    where (solution, output) = create_procs (length mat) 1 mat output
+-}
+
+-- create_procs :: Int -> Int -> Matrix Int -> [[Int]] -> ([[Int]],[[Int]])
+create_procs size k (rowk:restmat) inputleft =
+  let xs = ring_iterate size k 1 rowk inputleft
+      ys = create_procs size (k+1) restmat (snd xs)
+  in case restmat of
+       [] -> ([fst xs], snd xs)
+       (r:rs) -> (fst xs : fst ys, snd ys)
+
+-- ring_iterate :: Int -> Int -> Int -> [Int] -> [[Int]] -> ([Int],[[Int]])
+ring_iterate size k i rowk rows =
+  if i > size
+    then (rowk, [])
+    else let rowi = head rows
+             xs   = tail rows
+             sols = (nextrowk `using` evalList rseq) `seq` (ring_iterate size k (i+1) nextrowk xs)
+             nextrowk = if i==k then rowk else  updaterow rowk rowi (rowk!!(i-1))
+         in if i==k then (fst sols, rowk:snd sols)
+                    else (fst sols, rowi:snd sols)
+
+updaterow [] rowi distij = []
+updaterow (distjk:restrowj) rowi distji
+  = case rowi of
+      (distik:restrowi) -> min distjk (distji + distik) : updaterow restrowj restrowi distji
+
+m1 size = replicate size (enumFromTo 1 size)
+
+-- splitIntoN :: Int -> [a] -> [[a]]
+splitIntoN n xs =
+  let l = length xs
+      parts = zipWith (+) ((replicate (l `mod` n) 1) ++ repeat 0)
+                          (replicate n (l `div` n))
+  in takeIter parts xs
+
+-- takeIter :: [Int] -> [a] -> [[a]]
+takeIter []     xs = [] -- xs should always be []
+takeIter (t:ts) xs = case splitAt t xs of
+  (hs,rest) -> hs : takeIter ts rest
+
+splitAt n xs = (take n xs, drop n xs)
+
+-- scanl :: (b -> a -> b) -> b -> [a] -> [b]
+scanl f q ls = q : (case ls of
+                      []     -> []
+                      (x:xs) -> scanl f (f q x) xs
+                   )
+
+foldl' f z []     = z
+foldl' f z (x:xs) = let z' = f z x
+                    in z' `seq` foldl' f z' xs
+
+main =
+  let res = wr2 10 (m1 10)
+  in sum (map sum res)
+
+{- This example hangs. I think it's because of a deadlock
+due to our simple context switching? -}

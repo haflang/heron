@@ -19,18 +19,21 @@
 module Heron
   ( sim,
     topEntity,
-    testBench,
+    -- testBench,
     compileBenchmark,
     dumpTemplates,
     dumpTestsuites,
     runEmulator,
+    SNat(..)
   )
 where
 
+import           Clash.Prelude  (SNat (..))
 import           Control.Monad
 import           Heron.Board
 import           Heron.Encode
 import           Heron.External
+import           Heron.Sim
 import           Prelude
 import           System.IO
 
@@ -93,3 +96,16 @@ dumpTestsuite srcDir f = do
 
     sanitiseName "while" = "while_"
     sanitiseName x       = x
+
+{-
+speedups :: FilePath -> IO (Double)
+speedups f = do
+  p <- compileBenchmark f
+  (t1,_,r1) <- sim  maxBound p
+  (t2x2,_,r2x2) <- sim2x2 (2*t1) p
+  let report t = fromIntegral t1 / fromIntegral t
+      sp2x2 = report t2x2
+  when (r2x2 /= r1) (error "Inconsistent results!")
+  putStrLn $ unwords ["1 ," , show sp2x2]
+  return (sp2x2)
+-}

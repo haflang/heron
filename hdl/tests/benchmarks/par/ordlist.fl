@@ -1,0 +1,43 @@
+data Nat
+  = S Nat
+  | Z
+
+implies False x = True
+implies True  x = x
+
+ord []           = True
+ord [x]          = True
+ord (x : y : ys) = (implies x y) && (ord (y : ys))
+
+ins x [] = [x]
+ins x (y : ys) =
+  if implies x y
+    then x : y : ys
+    else y : ins x ys
+
+prop x xs = implies (ord xs) (ord (ins x xs))
+
+boolList n = if n>0
+               then let m = n-1
+                    in boolList m ++
+                       map ((:) False) (boolList m) ++
+                       map ((:) True ) (boolList m)
+               else [[]]
+
+testFalse n = and $ map (prop False) (boolList n)
+testTrue  n = and $ map (prop True ) (boolList n)
+
+top n = let x = testFalse n
+            y = testTrue n
+        in y `par` x `seq` x && y
+
+{- If we go with `y par x && y`, the y is shared but x is not. The x branch
+evaluates much faster in the singlecore version. Speedup looks worse than expected -}
+
+main =
+  let num = 5
+  in if top num
+       then 1
+       else 0
+
+-- FIXME try a more general recusrive sparking to work OK with N cores
