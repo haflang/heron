@@ -192,12 +192,3 @@ We can perform testing with `cd hdl; cabal test`, or generate documentation with
 ## License
 
 Our project license is currently GPL 2.0. See [LICENSE](./LICENSE) for details.
-
-
-## TODO
-
-Still to mention:
-
-  + How to configure the number of cores in Siege
-  + TODO mention benchmark repo
-  + TODO Update test suite
