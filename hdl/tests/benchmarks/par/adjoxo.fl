@@ -103,35 +103,9 @@ main = adjudicate [1,3] [5]
 -- main = adjudicate [1,9] [7,3]
 -- ^ Gets x1.73 with parList, early choices on a symmetric board will be more evenly sized
 
--- What do we need to do to get better performance here? What does GHC get?
-
+-- Board positions are numbered:
 {-
 123
 456
 789
 -}
-
--- As is, both cores are active for almost the whole time, but there's no real
--- benefit? Updates issue or maybe reevaluation due to timing issue? Nah, issue
--- could be that one core is just doing the forceLists for work that is already
--- done! Try to refactor calls so that we can detect fizzled sparks better.
--- That requires `par`ing on the list element, rather than the forceList call.
-
--- OK, so I think the above is probably true of queens, but for this, the issue
--- was that I wasn't reporting blocking accurately in the VCD traces. I'll fix
--- this, and then the solution is allowing adding to the stack if we fetch a
--- blackhole. If we do foldr, the main core is just traversing the list, waiting
--- for the second core to evaluate its stuff.
--- The fact that core 0 never does work until the end means that the first job
--- is probably the largest.
-
--- I've started taking new tasks on blocking... but why on earth is it still
--- slower?! We're using both cores?! Could this be an issue of sharing? We spark
--- things and they take much longer to evaluate because they are now shared? Can
--- we avoid things being shared in a dual core environment, even if it breaks
--- the GC?
-
--- After loading sparks as unique pointers and disabling the immediate
--- deallocation of unique pointers, the dual core system no longer performs 3k
--- cycles slower --- it just does exactly the same. Let me revert some changes I
--- made to parList and try again. Yep. Same thing. What's going on!?

@@ -1,11 +1,12 @@
 [*]
 [*] GTKWave Analyzer v3.3.116 (w)1999-2023 BSI
 [*] Mon Apr 14 09:19:04 2025
+[*] Signal filter paths below are relative to the repository root.
 [*]
 [dumpfile] "/tmp/heron.vcd"
 [dumpfile_mtime] "Mon Apr 14 09:14:28 2025"
 [dumpfile_size] 1136737
-[savefile] "/home/craig/heron/hdl/gtkwave/style.gtkw"
+[savefile] "hdl/gtkwave/style.gtkw"
 [timestart] 0
 [size] 1920 1200
 [pos] -967 -42
@@ -18,23 +19,23 @@
 @800200
 -Phases
 @2024
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(0,0)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(0,1)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(0,2)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(1,0)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(1,1)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(1,2)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(2,0)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(2,1)_phase[3:0]
-^1 /home/craig/heron/hdl/gtkwave/CPUPhase.filter
+^1 hdl/gtkwave/CPUPhase.filter
 logic.Core_(2,2)_phase[3:0]
 @1000200
 -Phases
