@@ -1,0 +1,19 @@
+pfib n =
+  if n <= threshold
+    then fib n
+    else
+      if n <= 1
+        then 1
+        else let x = pfib (n - 2)
+                 y = pfib (n - 1)
+             in x `par` y + x
+
+fib n =
+  if n <= 1
+    then 1
+    else let x = fib (n - 2)
+             y = fib (n - 1)
+         in y + x
+
+threshold = 5
+main = pfib 10

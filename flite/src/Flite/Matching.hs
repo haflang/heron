@@ -1,18 +1,15 @@
 module Flite.Matching (desugarEqn, desugarCase) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.Fresh
-import Flite.Pretty
-import Data.List
-import Data.Maybe
-import Control.Monad
-import Debug.Trace
+import           Control.Monad
+import           Data.List
+import           Flite.Descend
+import           Flite.Fresh
+import           Flite.Syntax
+import           Flite.Traversals
 
 desugarEqn :: Prog -> Fresh Prog
 desugarEqn p = mapM (\(f, arity, qs) ->
-                      do us <- mapM (\_ -> fresh) [1..arity]
+                      do us <- mapM (const fresh) [1..arity]
                          rhs <- match us qs
                          return (Func f (map Var us) rhs)
                     ) (groupEqn p)
@@ -30,10 +27,10 @@ groupEqn p
             )
 
     rect :: [[a]] -> Bool
-    rect = (== 1) . length . groupBy (==) . map length
+    rect = (== 1) . length . group . map length
 
 desugarCase :: Prog -> Fresh Prog
-desugarCase = onExpM (\e -> caseVar e >>= desugar)
+desugarCase = onExpM (caseVar >=> desugar)
   where
     desugar (Case (Var v) as) =
       do as' <- mapM (\(p, e) -> do e' <- desugar e; return (p, e')) as
@@ -50,9 +47,9 @@ caseVar (Case e as) =
 caseVar e = descendM caseVar e
 
 getVar :: Exp -> Maybe Id
-getVar (Var v) = Just v
+getVar (Var v)    = Just v
 getVar (App e []) = getVar e
-getVar e = Nothing
+getVar e          = Nothing
 
 -- Wadler's algorithm for compilation of *uniform* pattern matching,
 -- from "The Implementation of Functional Programming Languages".
@@ -64,13 +61,14 @@ isWld (Wld:ps, e) = True
 isWld (Var v:ps, e) = False
 isWld (     Con c      :ps, e) = False
 isWld (App (Con c) args:ps, e) = False
-isWld (p:ps, e) = error $ "IsWld doesn't handle: "  ++ show p
+isWld e = error $ "Flite.Matching.isWld: Suspect equation " ++ show e
 
 isVar :: Equation -> Bool
 isVar (Wld:ps, e) = False
 isVar (Var v:ps, e) = True
 isVar (     Con c      :ps, e) = False
 isVar (App (Con c) args:ps, e) = False
+isVar e = error $ "Flite.Matching.isVar: Suspect equation " ++ show e
 
 isCon :: Equation -> Bool
 isCon e = not (isVar e)
@@ -78,6 +76,7 @@ isCon e = not (isVar e)
 getCon :: Equation -> (Id, [Pat])
 getCon (     Con c      :ps, e) = (c, []  )
 getCon (App (Con c) args:ps, e) = (c, args)
+getCon e = error $ "Flite.Matching.getCon: Suspect equation " ++ show e
 
 match :: [Id] -> [Equation] -> Fresh Exp
 match [] [q] = return (snd q)
@@ -100,9 +99,11 @@ groupEqns (q:qs)
 
 matchClause :: [Id] -> (Id, Int, [Equation]) -> Fresh Alt
 matchClause us (c, arity, qs) =
-  do us' <- mapM (\_ -> fresh) [1..arity]
+  do us' <- mapM (const fresh) [1..arity]
      alts <- match (us' ++ us) [(getSubPats p ++ ps, e) | (p:ps, e) <- qs]
      return (App (Con c) (map Var us'), alts)
   where
     getSubPats (Con c) = []
     getSubPats (App (Con c) ps') = ps'
+    getSubPats pat = error $
+      "Flite.Matching.matchClause: Suspect pattern pat " ++ show pat

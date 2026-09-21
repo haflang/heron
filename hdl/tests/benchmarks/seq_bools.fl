@@ -1,0 +1,13 @@
+bools n = if n == 0
+            then [[]]
+            else let m = n - 1
+                     rec = bools m
+                     fs = rec `seq` map (Cons False) rec
+                     ts = rec `seq` map (Cons True ) rec
+                 in fs ++ ts
+{-
+                 in  map (Cons False) rec ++
+                     map (Cons True ) rec
+-}
+
+main = last $ last $ bools 1

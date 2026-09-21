@@ -13,12 +13,12 @@ module Heron.Core.Heap
   , HeapIn
   , HeapOut (..)
   -- * Helpers
-  , arbitrateGC
+  , arbitrateHeap
   ) where
 
 import           Clash.Prelude
-
 import           Heron.Core.Types
+import           Heron.Error
 
 -- | Heap address type
 type RamAddr d = Index d
@@ -35,14 +35,19 @@ data HeapOut a p d
   , _size' :: RamAddr d -- ^ New size of heap memory after pending operations
   , _reads :: Vec p a   -- ^ Words returned by each port command
   } deriving (Show, Generic, NFDataX, ShowX)
+deriving instance (KnownNat d, KnownNat p, BitPack a, 1<=d)
+  => BitPack (HeapOut a p d)
 
 instance SizedRead (HeapOut a p d) where
   type SizedAddr (HeapOut a p d) = RamAddr d
   type SizedData (HeapOut a p d) = Vec p a
   size (HeapOut sz _ _) = sz
+  {-# INLINE size #-}
   read (HeapOut _ _ x) = x
+  {-# INLINE read #-}
 
 deriving instance ShowX a => ShowX (RamOp d a)
+deriving instance (KnownNat d, BitPack a, 1<=d) => BitPack (RamOp d a)
 
 -- | A heap is a multi-ported memory. A @Heap a p d@ has elements of type @a@, @p@
 --   independent ports, and a depth of @d@ elements.
@@ -94,25 +99,38 @@ getWriteAddr :: KnownNat n => RamOp n a -> Maybe (Index n)
 getWriteAddr (RamWrite addr _) = Just addr
 getWriteAddr _                 = Nothing
 
--- | Arbitrates heap access between mutator and collector. The collector
--- operation is always scheduled on the first heap port, and priority is always
--- given to the mutator.
-arbitrateGC
+-- | Arbitrates heap access between mutator, scheduler, and collector. The collector and scheduler
+-- operations are always scheduled on the first heap port, and priority is always
+-- given to the mutator (followed by the scheduler).
+arbitrateHeap
   :: forall d a p .
      ( KnownNat p
      , KnownNat d
      , NFDataX  a
+     , Show     a
      )
-  => HeapIn a (p+1) d
+  => HeapIn a (p+2) d
   -> RamOp d a
-  -> (HeapIn a (p+1) d, Bool)
-arbitrateGC ops RamNoOp = (ops, False)
-arbitrateGC ops gc
-  | not (isNoOp $ head ops) = (ops, False) -- error "GC and Core conflict on port A" --DEBUG
-  -- | any (collides gc) ops   = error "GC READ and Core WRITE conflict" --DEBUG
-  | otherwise = (gc :> tail ops, True)
+  -> RamOp d a
+  -> (HeapIn a (p+2) d, Bool, Bool, Maybe Err)
+arbitrateHeap ops gc com
+  | mutIdle && isOp com = go (com :> tail ops) False True
+  | mutIdle && isOp gc  = go (gc  :> tail ops) True  False
+  | otherwise           = go ops               False False
   where
+    go xs a b = (xs, a, b, checkCollision xs)
+    mutIdle = isNoOp $ head ops
+    isOp = not . isNoOp
     isNoOp RamNoOp = True
     isNoOp _       = False
-    -- collides (RamRead x) (RamWrite y _) = x==y
-    -- collides _ _ = False
+    checkCollision :: HeapIn a (p+2) d -> Maybe Err
+    checkCollision ((RamWrite x _) :> (RamWrite y _) :> _)
+      | x==y = Just ErrMemCollisionWW -- RF BRAM only has W-W collisions
+{-
+    checkCollision as@((RamRead x) :> (RamWrite y _) :> zs)
+      | x==y = errorX $ unwords ["Possible RW heap collision on ", show as] -- RF BRAM only has W-W collisions
+    checkCollision as@((RamWrite x _) :> (RamRead y) :> zs)
+      | x==y = errorX $ unwords ["Possible WR heap collision on ", show as] -- RF BRAM only has W-W collisions
+-}
+    checkCollision _ = Nothing
+-- TODO Really need to specialise the collision checking for each memory, taking into account our invariants.

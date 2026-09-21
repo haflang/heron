@@ -14,11 +14,15 @@ module Heron.Primitives.ReadFirstDualPortRam
   ( RamArch(..)
   , dpRamE
   , dpRam
+  , topEntity
+  , testBench
   ) where
 
 import           Clash.Annotations.Primitive
+import           Clash.Annotations.TH
 import           Clash.Prelude
 import           Clash.XException.MaybeX            (MaybeX (..), andX)
+import qualified Data.List                          as L
 import           Data.Sequence                      (Seq, update)
 import           Data.String.Interpolate            (i)
 import           Data.String.Interpolate.Util       (unindent)
@@ -226,3 +230,29 @@ trueDualPortBlockRam# clkA enA weA addrA datA clkB enB weB addrB =
       IsX msg -> update addr dat $ deepErrorX $
           "Write enable unknown; position" <> show addr <>
         "\nWrite enable error message: " <> msg
+
+testBench :: [(Int,Int)]
+testBench = L.drop 1 $ simulateN @System (1+L.length inp) (bundle . uncurry (dpRam BlockRam) . unbundle) inp
+  where
+    inp :: [(RamOp 10 Int, RamOp 10 Int)]
+    inp = [ (RamWrite 0 99, RamWrite 1 98)
+          , (RamRead  0   , RamWrite 0 97) -- R/W
+          , (RamWrite 0 96, RamRead  0   ) -- W/R
+          , (RamWrite 0 95, RamWrite 0 94) -- W/W
+          , (RamRead  0   , RamRead  0   )
+          ]
+
+topEntity
+  :: "clk" ::: Clock System
+  -> "en"  ::: Signal System Bool
+  -> "weA" ::: Signal System Bool
+  -> "addrA" ::: Signal System (Index 1024)
+  -> "dataA" ::: Signal System (Unsigned 72)
+  -> "weB" ::: Signal System Bool
+  -> "addrB" ::: Signal System (Index 1024)
+  -> "dataB" ::: Signal System (Unsigned 72)
+  -> "out" ::: (Signal System (Unsigned 72), Signal System (Unsigned 72))
+topEntity = dpRamE# "block"
+
+{-# NOINLINE topEntity #-}
+makeTopEntity 'topEntity

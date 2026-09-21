@@ -1,0 +1,50 @@
+-- This is a bad implementation of half. The first list is reversed, but that's OK here.
+half xs = half' (length xs) [] xs
+
+half' n acc [] = (acc,[])
+half' n acc (x:xs) =
+  if n <= 0
+    then (acc, x:xs)
+    else half' (n-2) (x : acc) xs
+
+merge [] ys = ys
+merge (x:xs) ys = case ys of
+  [] -> x:xs
+  (z:zs) -> if x <= z
+              then x : merge xs ys
+              else z : merge (x:xs) zs
+
+mergeSort xs = case xs of
+  [] -> []
+  (y:ys) -> case ys of
+    [] -> [y]
+    (z:zs) -> case half xs of
+                (a,b) -> let a' = mergeSort a
+                             b' = mergeSort b
+                         in merge a' b'
+
+mergeSortPar t xs =
+  if t == 0
+    then mergeSort xs
+    else case xs of
+      [] -> []
+      (y:ys) -> case ys of
+        [] -> [y]
+        (z:zs) -> case half xs of
+                    (a,b) -> let t' = t - 1
+                                 a' = mergeSortPar t' a `using` evalList rseq
+                                 b' = mergeSortPar t' b `using` evalList rseq
+                             in a' `par` b' `par` merge a' b'
+
+{-
+With b' seq, we get speedups of 1.90, 2.70, 2.51 (baseline is 473314)
+With b' par, we get speedsups of 1.89, 2.58, 2.71 (baseline is 472291)
+
+Look at vcd for a small version and see what the average put latency is like.
+
+Do all of this after refactoring Schedule though.
+-}
+
+main = let inp = enumFromTo 0 4000 -- `using` evalList rseq
+           threshold = 4
+       in maximum $ mergeSort inp

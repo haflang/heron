@@ -1,0 +1,7 @@
+gallery.aux*
+svg-inkscape
+tikz/*.dpth
+tikz/*.log
+tikz/*.pdf
+tikz/*.md5
+tikz/speedups-0.dep

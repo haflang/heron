@@ -1,22 +1,22 @@
 module Flite.ConcatApp where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
+import           Flite.Descend
+import           Flite.Syntax
+import           Flite.Traversals
 
 concatPatApps :: Prog -> Prog
 concatPatApps = onPats conc
   where
-    conc (App e []) = conc e
+    conc (App e [])          = conc e
     conc (App (App f xs) ys) = descend conc (App f (xs ++ ys))
-    conc e = descend conc e
+    conc e                   = descend conc e
 
 concatApps :: Prog -> Prog
 concatApps = onExp conc
   where
-    conc (App e []) = conc e
+    conc (App e [])          = conc e
     conc (App (App f xs) ys) = descend conc (App f (xs ++ ys))
-    conc e = descend conc e
+    conc e                   = descend conc e
 
 concatNonPrims :: Prog -> Prog
 concatNonPrims = onExp conc

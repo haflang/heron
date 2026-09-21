@@ -1,12 +1,11 @@
 module Flite.Writer where
 
-import Control.Monad       (liftM, ap)
-import Control.Applicative (Applicative(..))
+import           Control.Monad (ap, liftM)
 
 data Writer w a = W [w] a
 
 instance Monad (Writer w) where
-  return a = W [] a
+  return = W []
   W w0 a0 >>= f = case f a0 of W w1 a1 -> W (w0 ++ w1) a1
 
 instance Functor (Writer w) where

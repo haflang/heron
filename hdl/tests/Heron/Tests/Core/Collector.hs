@@ -133,7 +133,7 @@ genThreshold :: HasCallStack => Gen HeapAddr
 genThreshold = fromIntegral <$> int (linear 0 $ snatToNum (SNat @(HeapSize `Div` 4)) - 1)
 
 genAtom :: HasCallStack => [HeapAddr] -> Gen Atom
-genAtom as = choice [pure $ PrimInt 0, Ptr True <$> element as]
+genAtom as = choice [pure $ PrimInt 0, Ptr PShared <$> element as]
   -- ^ We only generate pointers or one form of non-pointers
 
 genApp :: HasCallStack => (KnownNat a, KnownNat b) => [HeapAddr] -> Gen (Node a b)
@@ -272,7 +272,7 @@ doMemOps o i _ = i { gcIn = (gcIn i) { gcMemIn = memIn, heapMemIn = heapIn, upda
     stkSnoop = ( fromIntegral $ length (roots i)
                , let ptr = fromIntegral (_stkSnoopAddr o)
                  in if ptr < length (roots i)
-                   then Ptr False $ reverse (roots i) !! ptr
+                   then Ptr PUniq $ reverse (roots i) !! ptr
                    else PrimInt 0
                )
 
@@ -311,7 +311,7 @@ genStepRoots i _ bubbleCycle = MutState
     , updateIn     = updateIn  $ gcIn i
     , bubble       = bubbleCycle
     , triggerThres = triggerThres $ gcIn i
-    , request      = RRoot . V.unsafeFromList . take cmaxpush $ map (Ptr False) (roots i) ++ repeat (PrimInt 0)
+    , request      = RRoot . V.unsafeFromList . take cmaxpush $ map (Ptr PUniq) (roots i) ++ repeat (PrimInt 0)
     , stkIn        = stkIn $ gcIn i
     }
   }

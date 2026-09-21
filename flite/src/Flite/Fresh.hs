@@ -1,9 +1,11 @@
+{-# LANGUAGE GADTs #-}
 module Flite.Fresh where
 
-import Control.Monad       (liftM, ap)
-import Control.Applicative (Applicative(..))
+import           Control.Applicative (Applicative (..))
+import           Control.Monad       (ap, liftM)
 
-data Fresh a = Fresh { runFresh :: String -> Int -> (Int, a) }
+data Fresh a where
+  Fresh :: {runFresh :: String -> Int -> (Int, a)} -> Fresh a
 
 instance Monad Fresh where
   return a = Fresh (\s i -> (i, a))

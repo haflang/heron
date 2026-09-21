@@ -32,7 +32,10 @@ alu (AluIn op swp x y) =
     go OpEq  a b = fromBool $ a==b
     go OpNeq a b = fromBool $ a/=b
     go OpLeq a b = fromBool $ a<=b
-    go OpSeq _ _ = error "Core.Core.alu: SEQ should be handled as a special case"
+    go f _ _ = error $ unwords
+      [ "Core.Core.alu: Should be handled as a special case: "
+      , show f
+      ]
 
 -- | A view for different stack patterns with primitive operations
 data PrimOpPat
@@ -42,8 +45,8 @@ data PrimOpPat
   -- ^ Binary operation with only first argument evaluated
   | SndInt  PInt (FnArity, IsSwapped, OpCode)
   -- ^ Binary operation with only second argument evaluated
-  | Seq     PInt Atom
-  -- ^ Special case for `Seq`
+  | Unwrap  PInt Atom
+  -- ^ Special case for unboxing an int and passing it to a worker
   | NotPrim
   -- ^ Not a primitive application
   deriving (Eq, Generic, NFDataX)
@@ -57,9 +60,9 @@ primOpPat :: forall n
 primOpPat as = leToPlus @3 @n $ go (takeI @3 as)
   where
     go (   Just (PrimInt x)
-        :> Just (PrimOp _ _ OpSeq)
+        :> Just (PrimOp _ _ OpUnwrap)
         :> Just y
-        :> Nil ) = Seq x y
+        :> Nil ) = Unwrap x y
     go (   Just (PrimInt x)
         :> Just (PrimInt y)
         :> Just (PrimOp ar swp op)

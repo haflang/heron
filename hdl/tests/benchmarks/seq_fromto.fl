@@ -1,0 +1,11 @@
+fromTo n m = if n <= m
+               then let xs = (fromTo (n + 1) m)
+                    in xs `seq` (n : xs)
+               else []
+{-
+fromTo n m = if n <= m
+               then n : fromTo (n + 1) m
+               else []
+-}
+
+main = last $ fromTo 0 1000

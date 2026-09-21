@@ -8,6 +8,7 @@
 -}
 module Heron.Core.Collector
   ( GCCmd(..)
+  , GCBarrier(..)
   , GCRequest(..)
   , GCNode(..)
   , GCIn(..)
@@ -22,37 +23,48 @@ module Heron.Core.Collector
   ) where
 
 import           Barbies.TH
-import           Clash.Prelude       hiding (read)
+import           Clash.Prelude        hiding (read)
 import           Control.Arrow
 import           Control.DeepSeq
-import           Control.Lens        hiding (Index, assign, at, both, imap, op,
-                                      (:>))
+import           Control.Lens         hiding (Index, assign, at, both, imap, op,
+                                       (:>))
 import           Control.Monad
 import           Control.Monad.State
 import           Data.Either
-import           Data.Maybe          (fromJust, fromMaybe, isJust)
+import           Data.Maybe           (fromJust, fromMaybe, isJust, isNothing)
 import           RetroClash.Barbies
-import           RetroClash.CPU      hiding (update)
+import           RetroClash.CPU       hiding (update)
 
 import           Heron.Core.Fifo
 import           Heron.Core.Heap
-import           Heron.Core.ParStack (PSAddr)
+import           Heron.Core.ParStack  (PSAddr)
 import           Heron.Core.Types
+import           Heron.Error
 import           Heron.Parameters
+import           Heron.Schedule.Types (RefCountCmd (..), RefCountNode (..),
+                                       ThreadCmd (..), ThreadResult (..),
+                                       ThreadTag (..))
 import           Heron.Template
+import           Heron.TraceFSM
+
+type Deeply = Bool
 
 -- | Identifies the kind of GC metadata for a heap address.
 data GCNode
   = Unmarked
   -- ^ Possibly unreachable data (not _yet_ marked)
-  | Marked
+  | Marked Deeply
   -- ^ Definitely reachable data
   | FreeList HeapAddr
   -- ^ Definitely unreachable data (part of the `FreeList` linked-list)
   | WorkQueue HeapAddr
   -- ^ Definitely reachable data whose subgraphs are yet to be marked (part of
   -- the `WorkQueue` linked-list)
-  deriving (Generic, NFDataX, Show, ShowX, Eq, NFData)
+  deriving (Generic, NFDataX, Show, ShowX, Eq, NFData, BitPack)
+
+isMarked :: GCNode -> Bool
+isMarked (Marked _) = True
+isMarked _          = False
 
 {- TODO Maybe there is better performance to be gained if we refactor the various
  `pickOp` helpers into state calculated from the previous cycle, where possible.
@@ -61,7 +73,7 @@ data GCNode
 -- | Get the pointer to the linked-list tail from a `GCNode`
 tailPtr :: GCNode -> HeapAddr
 tailPtr Unmarked      = errorX "Unmarked GC nodes are not part of a linked-list"
-tailPtr Marked        = errorX "Marked GC nodes are not part of a linked-list"
+tailPtr (Marked _)    = errorX "Marked GC nodes are not part of a linked-list"
 tailPtr (FreeList a)  = a
 tailPtr (WorkQueue a) = a
 
@@ -71,24 +83,35 @@ data GCCmd
   -- ^ Keep calm and carry on
   | RootsCmd
   -- ^ Once in a safe state, dump the graph roots from the value stack
+  | WaitBufCmd
+  -- ^ Mutation buffer is full up --- pause please.
   | WaitCmd
   -- ^ Heap is full up --- pause please.
+  deriving (Generic, NFDataX, Show, ShowX, Eq, BitPack)
+
+data GCBarrier
+  = RootBarrierCmd
+  -- ^ GC is performing TSO root ID now, so we need to prevent mutator suspends/resumes
   | UpdateBarrierCmd
   -- ^ GC is performing marking now, so it needs to know about any updates
-  -- committed to the heap.
-  | FailCmd
-  -- ^ Heap is exhausted with live data. Give up.
-  deriving (Generic, NFDataX, Show, ShowX, Eq)
+  -- committed to the heap. This also prevents resume/suspend operations
+  deriving (Generic, NFDataX, Show, ShowX, Eq, BitPack)
 
 -- | Collector phase
 data Phase
   = Init HeapAddr
   | Idle
-  | Roots
+  | RootsStack
+  | RootsUStk (Index UStkSize)
+  | RootsBlocked
+  | RootsReady
+  | RootsRef
   | Mark
-  | Sweep (Maybe HeapAddr)
+  | SweepSparks
+  | SweepRefs
+  | SweepHeap (Maybe HeapAddr)
   | Halt
-  deriving (Generic, NFDataX, Show, ShowX, Eq)
+  deriving (Generic, NFDataX, Show, ShowX, Eq, BitPack)
 
 -- | Linked list metadata
 data GCList = GCList
@@ -96,7 +119,7 @@ data GCList = GCList
   , _llHead   :: HeapAddr
   , _llUpdate :: Bool
   }
-  deriving (Generic, NFDataX, Show, ShowX, Eq)
+  deriving (Generic, NFDataX, Show, ShowX, Eq, BitPack)
 makeLenses ''GCList
 
 -- TODO Should make helpers for pop and push. What's the general pattern?
@@ -113,7 +136,7 @@ data GCRequest
   | RNothing
     -- ^ Signals that the reduction has completed and we are free to reset the
     -- bookkeeping memory
-  deriving (Generic, NFDataX, Show, ShowX, Eq)
+  deriving (Generic, NFDataX, Show, ShowX, Eq, BitPack)
 
 type StackState = (PSAddr VStkSize, Atom)
   -- ^ (Current stack size, Stack element read from the snoop port)
@@ -129,7 +152,8 @@ declareBareB [d|
     -- ^ A flag suggesting when the mutator has a gap between its allocations.
     -- Since the collector sees the mutator outputs one cycle later, this gives
     -- us an indication of what the mutator is doing _now_.
-    , updateIn  :: FOut HeapNode GCMutBufSize
+    , mutUpdateIn  :: FOut HeapNode GCMutBufSize
+    , comUpdateIn  :: FOut HeapNode GCMutBufSize
     -- ^ The previous contents of any heap application which has been
     -- overwritten during marking
     , triggerThres :: HeapAddr
@@ -138,11 +162,58 @@ declareBareB [d|
     -- ^ Requests sent from the mutator
     , stkIn :: StackState
     -- ^ Stack state details for root ID
+    , rcReady :: Bool
+    , rcNextRef :: Maybe (Maybe (HeapAddr, RefCountNode))
+    , threadReady :: Bool
+    , threadRet :: Maybe ThreadResult
+    , curTSO :: HeapAddr
+    , mutSuspending :: Bool
+    , ustkIn :: Update
+    , ustkRet :: Bool
+    , ustkWarn :: Bool
     } |]
 deriving instance Generic (Pure GCIn)
 deriving instance NFDataX (Pure GCIn)
+deriving instance BitPack (Pure GCIn)
 deriving instance Show    (Pure GCIn)
 deriving instance ShowX   (Pure GCIn)
+
+type FreeLists = Vec MaxAps (GCList, GCList)
+
+-- | The collector's internal state
+data GCState = GCState
+  { _phase     :: Phase
+  , _postMark  :: Maybe Phase
+  , _freelist  :: FreeLists
+  -- ^ We maintain MaxAps pairs of freelists. Each channel needs two freelists
+  -- because of the latency between mutator and collector. As soon as the
+  -- mutator performs an allocation, it can swap to using the second list in the
+  -- pair while the collector returns the first element to a valid state.
+  , _worklist  :: GCList
+  , _heapLatch :: Either HeapAddr (Len NodeLen, Vec NodeLen (Markable Atom))
+  -- ^ A latched copy of the latest application read from the shared heap
+  -- memory, along with an index to the current atom for marking
+  , _workLatch :: Maybe GCNode
+  -- ^ A latched copy of the latest node read from the bookkeeping memory's workqueue.
+  , _prevAddr  :: Maybe HeapAddr
+  -- ^ The previous address "used" --- has different purposes for each GC phase.
+  , _unproductivePasses  :: Unsigned 4
+  -- ^ Statistics for detecting heap exhaustion. We might need multiple GC
+  -- passes before we're sure the heap is full of live data because anything
+  -- allocated during marking is assumed to be live.
+  , _mutBufSz  :: Unsigned (CLog 2 GCMutBufSize)
+  -- ^ The current size of the mutator's update buffer
+  , _rootSp :: PSAddr VStkSize
+  , _sp :: PSAddr VStkSize
+  , _ustkLatch :: Maybe Update
+  , _ustkOpLatch :: RamOp UStkSize Update
+  , _ustkEnd :: Bool
+  , _descend :: Bool -- When marking this element, should we descend into its
+                     -- subgraphs or just mark it and move on (for reserved
+                     -- addresses that don't count as roots)
+  }
+  deriving (Generic, NFDataX, Show, ShowX, BitPack, AutoReg)
+makeLenses ''GCState
 
 -- | Outputs from the collector subsystem
 declareBareB [d|
@@ -156,53 +227,34 @@ declareBareB [d|
     -- ^ The next few free addresses, ready for allocation.
     , _cmd        :: GCCmd
     -- ^ The command to be passed to the mutator
-    , _updatePop  :: Bool
+    , _barrier    :: Maybe GCBarrier
+    -- ^ The barrier to be
+    , _comUpdatePop  :: Bool
+    , _mutUpdatePop  :: Bool
     -- ^ Pop an element from the mutation update buffer.
     , _remaining  :: Vec MaxAps (HeapAddr, HeapAddr)
     -- -- ^ The number of remaining free addresses on each channel of freelists.
     -- -- For debugging only.
     , _stkSnoopAddr :: PSAddr VStkSize
+    , _rcCmd :: Maybe RefCountCmd
+    , _rcRetPop :: Bool
+    , _threadCmd :: Maybe ThreadCmd
+    , _threadRetPop :: Bool
+    , _ustkSnoop :: RamOp UStkSize Update
+    , _errGc :: Maybe Err
     } |]
 makeLenses ''GCOut
 deriving instance Generic (Pure GCOut)
 deriving instance NFDataX (Pure GCOut)
+deriving instance BitPack (Pure GCOut)
 deriving instance Show    (Pure GCOut)
 deriving instance ShowX   (Pure GCOut)
-
-type FreeLists = Vec MaxAps (GCList, GCList)
-
--- | The collector's internal state
-data GCState = GCState
-  { _phase     :: Phase
-  , _freelist  :: FreeLists
-  -- ^ We maintain MaxAps pairs of freelists. Each channel needs two freelists
-  -- because of the latency between mutator and collector. As soon as the
-  -- mutator performs an allocation, it can swap to using the second list in the
-  -- pair while the collector returns the first element to a valid state.
-  , _worklist  :: GCList
-  , _heapLatch :: Either HeapAddr (Len NodeLen, Vec NodeLen (Maybe Atom))
-  -- ^ A latched copy of the latest application read from the shared heap
-  -- memory, along with an index to the current atom for marking
-  , _workLatch :: Maybe GCNode
-  -- ^ A latched copy of the latest node read from the bookkeeping memory's workqueue.
-  , _prevAddr  :: Maybe HeapAddr
-  -- ^ The previous address "used" --- has different purposes for each GC phase.
-  , _unproductivePasses  :: Unsigned 2
-  -- ^ Statistics for detecting heap exhaustion. We might need multiple GC
-  -- passes before we're sure the heap is full of live data because anything
-  -- allocated during marking is assumed to be live.
-  , _mutBufSz  :: Unsigned (CLog 2 GCMutBufSize)
-  -- ^ The current size of the mutator's update buffer
-  , _rootSp :: PSAddr VStkSize
-  , _sp :: PSAddr VStkSize
-  }
-  deriving (Generic, NFDataX, Show, ShowX)
-makeLenses ''GCState
 
 -- | Initial GC state
 initGCState :: GCState
 initGCState = GCState
   { _phase = Init 0
+  , _postMark = Nothing
   , _freelist = fl
   , _worklist = wl
   , _heapLatch = Right (0, repeat Nothing)
@@ -212,6 +264,10 @@ initGCState = GCState
   , _mutBufSz  = 0
   , _rootSp = 0
   , _sp = 0
+  , _ustkEnd = False
+  , _ustkLatch = Nothing
+  , _ustkOpLatch = RamNoOp
+  , _descend = True
   }
   where
     fl = (GCList quartLength  0           False
@@ -288,30 +344,59 @@ defaultOutput GCState{..} = GCOut
   , _heapMemOut = either Just (const Nothing) _heapLatch
   , _nextFree = map (both nextHead) _freelist
   , _cmd      = cmd'
+  , _barrier  = barrier'
   , _remaining = map (both _llLen) _freelist
-  , _updatePop = False
+  , _comUpdatePop = False
+  , _mutUpdatePop = False
   , _stkSnoopAddr = _rootSp
+  , _rcCmd = Nothing
+  , _rcRetPop = False
+  , _threadCmd = Nothing
+  , _threadRetPop = False
+  , _ustkSnoop = _ustkOpLatch
+  , _errGc = if _phase == Halt then Just ErrHeapFull else Nothing
   }
   where
-    mutBufFull = _mutBufSz >= snatToNum (SNat @(GCMutBufSize-1))
-    cmd' | _phase == Halt     = FailCmd
-         | isInit _phase      = WaitCmd
-         | _phase == Roots && nearStackPtr _sp _rootSp = RootsCmd
-           -- ^ We (ab)use the worklist's update flag to signal when the mutator need to be paused for sequential root ID.
-         | heapFull _freelist = WaitCmd
-         | mutBufFull         = WaitCmd
-         | _phase == Mark     = UpdateBarrierCmd
-         | otherwise          = NoCmd
+    mutBufFull = _mutBufSz >= snatToNum (SNat @(GCMutBufSize-2))
+    cmd' = fromMaybe NoCmd $ needsRoot <|> needsWait
+    barrier' = needsRootBarrier <|> needsUpdBarrier
+    needsRoot
+      | _phase == RootsStack && nearStackPtr _sp _rootSp = Just RootsCmd
+        -- ^ We (ab)use the worklist's update flag to signal when the mutator need to be paused for sequential root ID.
+      | otherwise = Nothing
+    needsWait
+      | isInit _phase
+        || heapFull _freelist = Just WaitCmd
+      | mutBufFull            = Just WaitBufCmd
+      | otherwise = Nothing
+    needsRootBarrier
+      | _phase == RootsStack   = Just RootBarrierCmd
+      | isUStk _phase = Just RootBarrierCmd
+      | _phase == RootsBlocked = Just RootBarrierCmd
+      | _phase == RootsReady   = Just RootBarrierCmd
+      | maybe False isUStk _postMark = Just RootBarrierCmd
+      | _postMark == Just RootsBlocked = Just RootBarrierCmd
+      | _postMark == Just RootsReady   = Just RootBarrierCmd
+      | otherwise = Nothing
+    needsUpdBarrier
+      | _phase == Mark     = Just UpdateBarrierCmd
+      | _phase == RootsRef = Just UpdateBarrierCmd
+      | _phase == SweepSparks = Just UpdateBarrierCmd
+      | otherwise = Nothing
+
     nextHead l
       | _llUpdate l = Nothing -- Freelist needs one cycle to return to stable state
       | otherwise   = Just $ _llHead l
     isInit (Init _) = True
     isInit _        = False
+    isUStk (RootsUStk _) = True
+    isUStk _             = False
 
 -- | Synchronous control logic, packaged as a Mealy machine
 gc :: (HiddenClockResetEnable dom)
-    => Signals dom GCIn -> Signals dom GCOut
-gc = mealyCPU initGCState defaultOutput step
+    => Signal dom CoreId -> Signals dom GCIn -> Signals dom GCOut
+gc = traceFSM "_gc" initGCState defaultOutput step
+{-# NOINLINE gc #-}
 
 -- | Simulate the collector for one cycle
 runGc :: Pure GCIn -> State GCState (Pure GCOut)
@@ -327,8 +412,10 @@ step GCIn{..} = do
   updateNexts gcMemIn
   -- Latch any reads from GC bookkeeping and shared heap memories
   latchReads heapMemIn gcMemIn
+  -- Latch any communications to ustk
+  updateUStk ustkIn ustkRet ustkWarn
   -- Register some inputs as state for `defaultOutput`
-  mutBufSz .= size updateIn
+  mutBufSz .= max (size comUpdateIn) (size mutUpdateIn)
   sp .= fst stkIn
   -- Go
   p <- use phase
@@ -350,21 +437,35 @@ step GCIn{..} = do
   gcTasks Idle     = do
     fls <- use freelist
     if gcTrigger fls
-      then phase .= Roots
+      then do
+        when bubble (void balanceFreelists)
+        when (heapFull fls) (unproductivePasses %= (+1))
+        phase .= RootsStack
       else when bubble (void balanceFreelists >> redistribute)
-  gcTasks Roots    = when bubble (void balanceFreelists) >>
-                     gatherRoots (rootsMsg request) stkIn
+  gcTasks RootsStack = when bubble (void balanceFreelists) >>
+                       gatherRoots (rootsMsg request) stkIn curTSO
+  gcTasks (RootsUStk x) = gatherRootsUStk x
+  gcTasks RootsBlocked = do fls <- use freelist
+                            when bubble (void balanceFreelists)
+                            unless (mutSuspending && not (heapFull fls)) $
+                              gatherRootsBlocked threadReady threadRet
+  gcTasks RootsReady   = when bubble (void balanceFreelists) >>
+                         gatherRootsReady threadReady threadRet
+  gcTasks RootsRef     = when bubble (void balanceFreelists) >>
+                         gatherRootsRef rcReady rcNextRef
   gcTasks Mark     = do
     when bubble (void balanceFreelists)
     blocked <- isLeft <$> use heapLatch
-    unless blocked (mark updateIn)
-  gcTasks (Sweep x) = sweep x bubble
+    unless blocked (mark mutUpdateIn comUpdateIn)
+  gcTasks SweepSparks   = sweepSparks threadReady threadRet
+  gcTasks SweepRefs     = sweepRefs rcReady rcNextRef
+  gcTasks (SweepHeap x) = sweep x bubble
   gcTasks Halt      = pure ()
   -- TODO There's some scope for lifting on the balanceFreelists call into one
   -- shared place. Does the replication as it stands work better than any extra
   -- routing constraints when shared?
 
-  gcTrigger = fold (||) . map ((triggerThres >) . _llLen . snd)
+  gcTrigger = fold (||) . map (uncurry (||) . both ((triggerThres >) . _llLen))
   rootsMsg (RRoot tops) = Just tops
   rootsMsg _            = Nothing
 
@@ -374,14 +475,13 @@ sweep x bubble =
   case x of
     -- Finished sweeping
     Nothing -> do
-      fl <- use freelist
-      when (heapFull fl) (unproductivePasses %= (+1))
       write    <- writeOp
       gcMemOut .:= RamNoOp :> write :> repeat RamNoOp
       prevAddr .= Nothing
+      phase .= Idle
       p <- use unproductivePasses
       if p==maxBound
-        then phase .= Halt
+        then phase .= Idle -- Halt TODO Removed to test for space leaks. Bad examples wont terminate; slow examples will
         else phase .= Idle
 
     -- Continue sweeping
@@ -391,8 +491,8 @@ sweep x bubble =
       gcMemOut .:= RamRead addr :> wr :> repeat RamNoOp
       workLatch .= Nothing
       phase .= if addr == maxBound
-                 then Sweep Nothing
-                 else Sweep (Just $ addr+1)
+                 then SweepHeap Nothing
+                 else SweepHeap (Just $ addr+1)
   where
     -- Inspect any previous read and derive write operation
     writeOp = do
@@ -400,12 +500,15 @@ sweep x bubble =
       wl <- use workLatch
       case liftA2 (,) pa wl of
         Nothing -> return RamNoOp
-        Just (a, Marked)      -> return $ RamWrite a Unmarked
+        Just (a, Marked _)      -> return $ RamWrite a Unmarked
         Just (_, FreeList  _) -> return RamNoOp
-        Just (_, WorkQueue _) -> errorX "Found workqueue element during sweep"
+        Just (_, WorkQueue _) -> failure ErrGcWorkDuringSweep >> return RamNoOp
         Just (a, Unmarked) -> do
             unproductivePasses .= 0
             onSmallestList (push a) bubble
+
+failure :: Err -> GC ()
+failure e = errGc .:= Just e
 
 -- Control structure to direct the marking phase
 data MarkOp
@@ -424,25 +527,32 @@ data MarkOp
   deriving (Generic, NFDataX, Show, ShowX, Eq)
 
 -- | Incrementally append any unvisited children to the workqueue, marking each address as we go
-mark :: FOut HeapNode GCMutBufSize -> GC ()
-mark updateIn = do
+mark :: FOut HeapNode GCMutBufSize -> FOut HeapNode GCMutBufSize -> GC ()
+mark mutUpdateIn comUpdateIn = do
   handlePop
+  noDescend <- not <$> use descend
   write <- commitPrevToWork
   wl    <- use worklist
   prevAddr .= Nothing
   pickOp >>= \case
 
-    MarkFetchBuffer -> do
-      let as = nAtoms . unpackNode False . fromJust $ read updateIn
-      gcMemOut  .:= write :> repeat RamNoOp
-      heapLatch .= Right (appLen as, as)
-      updatePop .:= True
+    MarkFetchBuffer -> if size mutUpdateIn > 0
+      then do
+        let as = nodeChildren . fromJust $ read mutUpdateIn
+        gcMemOut  .:= write :> repeat RamNoOp
+        heapLatch .= Right (appLen as, as)
+        mutUpdatePop .:= True
+      else do
+        let as = nodeChildren . fromJust $ read comUpdateIn
+        gcMemOut  .:= write :> repeat RamNoOp
+        heapLatch .= Right (appLen as, as)
+        comUpdatePop .:= True
 
     MarkFetchQueue -> do -- Fetch contents of worklist head from shared heap
-        gcMemOut   .:= RamWrite (_llHead wl) Marked :> repeat RamNoOp
+        gcMemOut   .:= RamWrite (_llHead wl) (Marked True) :> repeat RamNoOp
         -- ^ Looks like we should also include `write` but if that is a write,
         -- it is guaranteed to conflict with our current marking.
-        worklist .= if isNoOp write
+        worklist .= if isNoOp write || noDescend
           then wl & llLen %~ (\x -> x-1)
                   & llUpdate .~ True
           else wl & llLen %~ (\x -> x-1)
@@ -451,15 +561,20 @@ mark updateIn = do
         heapLatch .= Left (_llHead wl)
         workLatch .= Nothing
 
-    MarkFinish -> phase .= Sweep (Just 0) >>
-                  updatePop .:= True
-                  -- ^ Clears mut buffer if the mutator does an update at the
-                  -- last possible second. If we leave it there, it'll be marked
-                  -- on the next pass...
+    MarkFinish -> do
+      next <- use postMark
+      gcMemOut  .:= write :> repeat RamNoOp
+      phase .= fromMaybe SweepSparks next
+      prevAddr .= Nothing
+      postMark .= Nothing
+      -- updatePop .:= True
+      -- ^ Clears mut buffer if the mutator does an update at the
+      -- last possible second. If we leave it there, it'll be marked
+      -- on the next pass...
 
     MarkChild -> nextChild >>= \case
       Nothing -> gcMemOut .:= RamNoOp :> write :> repeat RamNoOp
-      Just c  ->
+      Just (work,c)  ->
         if collision c write
           then do
             gcMemOut .:= RamNoOp :> write :> repeat RamNoOp
@@ -468,6 +583,8 @@ mark updateIn = do
             gcMemOut .:= RamRead c :> write :> repeat RamNoOp
             workLatch .= Nothing
             prevAddr .= Just c
+            descend .= work
+            -- TODO Make a choice based on work/mark destination
 
   where
     collision x (RamWrite y _) = x==y
@@ -479,15 +596,21 @@ mark updateIn = do
     getPtr (RamWrite _ n) = tailPtr n
     getPtr _              = undefined
 
+    -- Should a given post-marking phase fully mark, or just put mutation buffer elements on the work queue?
+    fullMark Nothing          = True
+    fullMark (Just SweepRefs) = True
+    fullMark _                = False
+
     pickOp = do
       wl    <- use worklist
       mutSz <- use mutBufSz
+      post  <- use postMark
       child <- either (const 0) fst <$> use heapLatch
       if child > minBound
         then pure MarkChild
         else if mutSz > 0
           then pure MarkFetchBuffer
-          else if _llLen wl > 0
+          else if _llLen wl > 0 && fullMark post
             then pure MarkFetchQueue
             else pure MarkFinish
 
@@ -498,10 +621,11 @@ mark updateIn = do
            worklist .= (wlPrev & llUpdate .~ False
                                & llHead   .~ tailPtr prev)
 
+    markable x = (isRight x,) <$> either heapAddr heapAddr x
     nextChild = do
       (i,as) <- fromRight (0, repeat Nothing) <$> use heapLatch
       let rs = imap (\n a -> if resize n < i
-                        then fmap (n,) (heapAddr =<< a)
+                        then fmap (n,) (markable =<< a)
                         else Nothing) as
           r = fold (<|>) $ reverse rs
       heapLatch .= Right (maybe 0 (resize . fst) r, as)
@@ -518,9 +642,9 @@ data RootsOp
   | RootsFinish
   deriving (Generic, NFDataX, Show, ShowX, Eq)
 
--- | Find mutator's graph roots before marking the heap
-gatherRoots :: Maybe (Vec CMaxPush Atom) -> StackState -> GC ()
-gatherRoots mtops (n, a) = do
+-- | Find mutator's graph roots from its stack before marking the heap
+gatherRoots :: Maybe (Vec CMaxPush Atom) -> StackState -> HeapAddr -> GC ()
+gatherRoots mtops (n, a) tsoAddr = do
   write <- commitPrevToWork
   rsp <- use rootSp
   case pickOp rsp of
@@ -535,11 +659,14 @@ gatherRoots mtops (n, a) = do
       in findRoot rsp write (fromJust mtops !! i)
     RootsFinish -> do
       worklist %= (llUpdate .~ False)
-      gcMemOut .:= RamNoOp :> write :> repeat RamNoOp
+      -- On the last cycle, we also mark the current TSO address as live
+      gcMemOut .:= RamRead tsoAddr :> write :> repeat RamNoOp
       rootSp .= 0
-      prevAddr .= Nothing
-      phase    .= Mark
+      prevAddr .= Just tsoAddr
+      workLatch .= Nothing
+      phase    .= RootsUStk 1
       heapLatch .= Right (0, repeat Nothing)
+      -- TODO Try to add current tso here too.
   where
 
     -- Derive current operation
@@ -575,6 +702,276 @@ gatherRoots mtops (n, a) = do
               workLatch .= Nothing
               gcMemOut .:= fetch :> write :> repeat RamNoOp
 
+jumpToMarking :: Maybe Phase -> GC ()
+jumpToMarking p = do
+  heapLatch .= Right (0, repeat Nothing)
+  workLatch .= Nothing
+  phase .= Mark
+  postMark .= p
+
+gatherRootsBlocked :: Bool -> Maybe ThreadResult -> GC ()
+gatherRootsBlocked ready ret = do
+  write <- commitPrevToWork
+  gcMemOut .:= RamNoOp :> write :> repeat RamNoOp -- Default is to update previous entry
+  prevAddr .= Nothing
+  waiting >>= \case
+    -- Waiting for response
+    True -> case ret of
+      -- Nothing to do yet, make sure we update any previous entries
+      Nothing -> pure ()
+      Just (SparkElem _ _) -> failure ErrGcSparkDuringTsoRoots
+      -- Got a response
+      Just (TsoElem final' mtso) -> do
+        let done  = final' || isNothing mtso
+        let fetch = maybe RamNoOp RamRead mtso
+        when ready $ do
+          prevAddr .= mtso
+          gcMemOut .:= fetch :> write :> repeat RamNoOp
+          when (isJust mtso) $
+            workLatch .= Nothing
+          threadRetPop .:= True
+          if done
+            then resetWait >> phase .= RootsReady
+            else resetWait
+    False -> do
+      sz <- use mutBufSz
+      if sz > 0
+        then jumpToMarking (Just RootsBlocked) -- Switch to marking to clear mutation buffer (avoids blocking)
+        else when ready askNext -- Not waiting, get next
+  where
+    waiting = (/=0) <$> use rootSp
+    resetWait = rootSp .= 0
+    setWait = rootSp .= 1
+    askNext = do
+      setWait
+      threadCmd .:= Just PeekBlocked
+
+gatherRootsReady :: Bool -> Maybe ThreadResult -> GC ()
+gatherRootsReady ready ret = do
+  write <- commitPrevToWork
+  gcMemOut .:= RamNoOp :> write :> repeat RamNoOp -- Default is to update previous entry
+  prevAddr .= Nothing
+  waiting >>= \case
+    -- Waiting for response
+    True -> case ret of
+      -- Nothing to do yet, make sure we update any previous entries
+      Nothing -> pure ()
+      Just (SparkElem _ _) -> failure ErrGcSparkDuringTsoRoots
+      -- Got a response
+      Just (TsoElem final' mtso) -> do
+        let done  = final' || isNothing mtso
+        let fetch = maybe RamNoOp RamRead mtso
+        when ready $ do
+          prevAddr .= mtso
+          gcMemOut .:= fetch :> write :> repeat RamNoOp
+          when (isJust mtso) $
+            workLatch .= Nothing
+          threadRetPop .:= True
+          if done
+            then resetWait >> phase .= RootsRef
+            else resetWait
+    False -> do
+      sz <- use mutBufSz
+      if sz > 0
+        then jumpToMarking (Just RootsReady) -- Switch to marking to clear mutation buffer (avoids blocking)
+        else when ready askNext -- Not waiting, get next
+  where
+    waiting = (/=0) <$> use rootSp
+    resetWait = rootSp .= 0
+    setWait = rootSp .= 1
+    askNext = do
+      setWait
+      threadCmd .:= Just PeekReady
+      -- TODO Huge amount of overlap with gatherRootsBlocked. Abstract it.
+
+gatherRootsRef :: Bool -> Maybe (Maybe (HeapAddr, RefCountNode)) -> GC ()
+gatherRootsRef ready ret = do
+  write <- commitPrevToWork
+  gcMemOut .:= RamNoOp :> write :> repeat RamNoOp -- Default is to update previous entry
+  prevAddr .= Nothing
+  waiting >>= \case
+    -- Waiting for response
+    True -> case ret of
+      -- Nothing to do yet, make sure we update any previous entries
+      Nothing -> pure ()
+      -- End of list
+      Just Nothing  -> finish
+      -- Got a response
+      Just (Just (addr, RefCountNode ga count _)) -> do
+        let fetch = if count > 0 then RamRead addr else RamNoOp
+        when ready $ do
+          if isNothing ga && count == 0
+            then do
+              rcCmd .:= Just RCFree -- Remove elements that no longer have external references
+              rcRetPop .:= True
+              resetWait
+            else do
+              gcMemOut .:= fetch :> write :> repeat RamNoOp
+              if count > 0
+                then do
+                  prevAddr .= Just addr
+                  workLatch .= Nothing
+                else
+                  prevAddr .= Nothing
+              rcRetPop .:= True
+              resetWait
+    False -> do
+      sz <- use mutBufSz
+      if sz > 0
+        then jumpToMarking (Just RootsRef) -- Switch to marking to clear mutation buffer (avoids blocking)
+        else when ready askNext -- Not waiting, get next
+  where
+    waiting = (/=0) <$> use rootSp
+    resetWait = rootSp .= 0
+    setWait = rootSp .= 1
+    askNext = do
+      setWait
+      rcCmd .:= Just RCTraverse
+    finish = do
+      rcRetPop .:= True
+      resetWait
+      jumpToMarking Nothing
+      -- TODO Some amount of overlap with gatherRootsBlocked. Abstract it? Maybe?
+
+-- TODO We shouldn't take an extra cycle to wait for askNext calls. Instead, make a new state where we transition to Mark while handling any commitToPrev calls.
+
+sweepSparks :: Bool -> Maybe ThreadResult -> GC ()
+sweepSparks ready ret = waiting >>= \case
+  -- Waiting for response
+  True -> case ret of
+    Nothing -> pure ()
+    Just (TsoElem _ _) -> failure ErrGcTsoDuringSparkSweep
+    -- Got a response
+    Just (SparkElem final' msp) -> case msp of
+      -- Finished traversal, move onto next phase
+      Nothing -> done
+      -- Need to collect unconditionally
+      Just (_addr, Fizzled) -> when ready $ do
+        threadRetPop .:= True
+        threadCmd .:= Just CollectSpark
+        resetWait
+        when final' done
+      -- Conditionally collect
+      Just (addr, Sparked) -> use prevAddr >>= \case
+        -- Need to chech GC memory for status
+        Nothing -> do
+          gcMemOut .:= RamRead addr :> repeat RamNoOp
+          workLatch .= Nothing
+          prevAddr .= Just addr
+        -- Decide based on status
+        Just _ -> do
+          gcnode <- fromJust <$> use workLatch
+          unless (isMarked gcnode) $
+            threadCmd .:= Just CollectSpark
+          threadRetPop .:= True
+          prevAddr  .= Nothing
+          resetWait
+          when final' done
+      Just (_, Ready)   -> failure ErrGcTsoDuringSparkSweep
+      Just (_, Blocked) -> failure ErrGcTsoDuringSparkSweep
+  False -> do
+    sz <- use mutBufSz
+    if sz > 0
+      then jumpToMarking Nothing -- Switch to marking to clear mutation buffer (avoids blocking)
+                                 -- `Nothing` will ensure we do a complete mark, not just add things to the worklist.
+      else when ready askNext -- Not waiting, get next
+  where
+    waiting = (/=0) <$> use rootSp
+    resetWait = rootSp .= 0
+    setWait = rootSp .= 1
+    askNext = do
+      setWait
+      threadCmd .:= Just PeekSpark
+    done = do
+      sz <- use mutBufSz
+      resetWait
+      threadRetPop .:= True
+      if sz > 0
+        then jumpToMarking (Just SweepRefs) -- Switch to marking to clear mutation buffer (avoids blocking)
+        else do phase .= SweepRefs
+
+sweepRefs :: Bool -> Maybe (Maybe (HeapAddr, RefCountNode)) -> GC ()
+sweepRefs ready ret = waiting >>= \case
+  -- Waiting for response
+  True -> case ret of
+    Nothing -> pure ()
+    -- Finished traversal, move onto next phase
+    Just Nothing -> done
+    -- Got a response
+    Just (Just (addr,rc)) -> if _rcCount rc == 0
+      -- Conditionally collect
+      then if isNothing (_rcSrc rc)
+        then when ready $ do
+          rcCmd .:= Just RCFree -- Remove elements that no longer have external references
+          rcRetPop .:= True
+          resetWait
+        else use prevAddr >>= \case
+          -- Need to chech GC memory for status
+          Nothing -> do
+            gcMemOut .:= RamRead addr :> repeat RamNoOp
+            workLatch .= Nothing
+            prevAddr .= Just addr
+          -- Decide based on status
+          Just _ -> when ready $ do
+            gcnode <- fromJust <$> use workLatch
+            unless (isMarked gcnode) $
+              rcCmd .:= Just RCFree
+            rcRetPop .:= True
+            prevAddr  .= Nothing
+            resetWait
+      -- Continue
+      else do
+        rcRetPop .:= True
+        prevAddr  .= Nothing
+        resetWait
+  False -> when ready askNext -- Not waiting, get next
+  where
+    waiting = (/=0) <$> use rootSp
+    resetWait = rootSp .= 0
+    setWait = rootSp .= 1
+    askNext = do
+      setWait
+      rcCmd .:= Just RCTraverse
+    done = do
+      phase .= SweepHeap (Just 0)
+      rcRetPop .:= True
+      resetWait
+
+-- TODO Rework the logic that sets GA in RC memory. We only want to save it when
+-- we want to decrement owner RC on free (i.e. when that holds an indirection?)
+
+gatherRootsUStk :: Index UStkSize -> GC ()
+gatherRootsUStk x = do
+  write <- commitPrevToWork
+  gcMemOut .:= RamNoOp :> write :> repeat RamNoOp -- Default is to update previous entry
+  prevAddr .= Nothing
+  use ustkEnd >>= \case
+    True -> finish -- Finished through early exit
+    False -> do -- Keep going
+      l <- use ustkLatch
+      go x write l
+  where
+    finish = do
+      phase .= RootsBlocked
+      ustkLatch .= Nothing
+      ustkEnd .= False
+
+    -- Assert ustk read  (l = Nothing                       )
+    go addr _write Nothing = do
+      prevAddr  .= Nothing
+      ustkOpLatch .= RamRead addr
+    -- Dispatch gc read  (l = Just Left ; prevAddr = Nothing)
+    go addr write (Just u) = case uAddr u of
+      Nothing -> errorX "There shouldn't be any Nothing updates now?!" -- Already nullified, skip to next
+      Just a  -> do
+        prevAddr .= Just a
+        gcMemOut .:= RamRead a :> write :> repeat RamNoOp
+        workLatch .= Nothing
+        ustkLatch .= Nothing
+        if addr == maxBound
+          then finish
+          else phase .= RootsUStk (succ addr)
+
 -- | Push an unmarked `_prevAddr` onto the workqueue. This must first be read
 -- and latched in `_workLatch` so we can ensure that the address does not
 -- already appear in the workqueue. Cycles would damage our linked-list
@@ -582,10 +979,21 @@ gatherRoots mtops (n, a) = do
 commitPrevToWork :: GC (RamOp HeapSize GCNode)
 commitPrevToWork = use prevAddr >>= \case
   Nothing -> return RamNoOp
-  Just a  -> use workLatch >>= \case
-    Just Unmarked -> pushwl a
-    _ -> return RamNoOp
+  Just addr -> do
+    wl <- use workLatch
+    d  <- use descend
+    commit addr wl d
   where
+    commit a node deeply
+      -- When not descending into a new addr
+      | not deeply && node == Just Unmarked = writeMarked a
+      -- When descending into a new or shallowly marked addr
+      | deeply && (node == Just Unmarked || node == Just (Marked False)) = pushwl a
+      -- Nothing useful
+      | otherwise = pure RamNoOp
+    writeMarked a = do
+      descend .= True
+      pure $ RamWrite a (Marked False)
     pushwl a = do
       wl   <- use worklist
       let op = RamWrite a (WorkQueue $ _llHead wl)
@@ -599,31 +1007,50 @@ commitPrevToWork = use prevAddr >>= \case
 latchReads :: Maybe HeapNode -> HeapOut GCNode MaxAps HeapSize -> GC ()
 latchReads heapMemIn gcMemIn = do
   when (isJust heapMemIn) $
-       let as = nAtoms . unpackNode False $ fromJust heapMemIn in
+       let as = nodeChildren $ fromJust heapMemIn in
        heapLatch .= Right (appLen as, as)
   workLatch %= Just . fromMaybe (head $ read gcMemIn)
 
 -- | Whenever a freelist has been used in an allocation, update its head pointer
 -- to the next free address.
 updateNexts :: HeapOut GCNode MaxAps HeapSize -> GC ()
-updateNexts gcMemIn =
-  freelist  %= zipWith upd (_reads gcMemIn)
+updateNexts gcMemIn = do
+  fl <- use freelist
+  when (or $ zipWith badFree (_reads gcMemIn) fl) $
+    failure ErrGcBadFree
+  freelist .= zipWith upd (_reads gcMemIn) fl
   where
     isFree (FreeList _) = True
     isFree _            = False
+    badFree a f = _llUpdate (snd f) && not (isFree a)
     upd a f
-      -- DEBUG
-      | _llUpdate (snd f) && not (isFree a) = errorX "Found non-free address on free list"
       | _llUpdate (snd f)
       = second (\l ->l & llUpdate .~ False
                        & llHead   .~ tailPtr a)
                f
       | otherwise = f
 
+-- | Whenever we get a ustk snoop respose, latch the answer and deassert any operations
+updateUStk :: Update -> Bool -> Bool -> GC ()
+updateUStk uin uret uwarn
+  -- Got to end
+  | uwarn = do
+      ustkEnd .= True
+      ustkLatch .= Nothing
+      ustkOpLatch .= RamNoOp
+  | uret = do
+      ustkEnd .= False
+      ustkLatch .= Just uin
+      ustkOpLatch .= RamNoOp
+  | otherwise = pure ()
+
 -- | Is there an immediate deallocation request that should be handled on this cycle?
 deallocSafe :: Phase -> HeapAddr -> Bool
-deallocSafe Mark _             = False
-deallocSafe _ _                = True
+deallocSafe Mark        _  = False
+deallocSafe RootsBlocked _ = False
+deallocSafe RootsReady   _ = False
+deallocSafe RootsRef     _ = False
+deallocSafe _ _            = True
 
 -- | Update bookkeeping to reflect new allocations
 alloc :: Vec MaxAps Bool -> Bool -> GC ()
@@ -648,10 +1075,12 @@ alloc as bubble = do
     upd (Just _) f
       = swp $ first (\l -> l & llLen %~ (\z->z-1)  & llUpdate .~ True) f
     upd Nothing f = f
-    freshNode Mark  _ = Marked
-    freshNode (Sweep (Just saddr)) addr =
-      if addr < satPred SatZero saddr then Unmarked else Marked
-    freshNode _  _ = Unmarked
+    freshNode Idle _ = Unmarked
+    freshNode RootsStack _ = Unmarked
+    freshNode (SweepHeap Nothing) _ = Unmarked
+    freshNode (SweepHeap (Just saddr)) addr =
+      if addr < satPred SatZero saddr then Unmarked else Marked False
+    freshNode _  _ = Marked False
 
 -- | Update bookkeeping to reflect immediate deallocations
 free :: HeapAddr -> Bool -> GC ()

@@ -1,0 +1,34 @@
+\begin{tikzpicture}[ penciline={jag ratio=1}
+                   , every node/.style={minimum width=1.0cm, minimum height=2em, inner sep=1pt, outer sep=2pt, text width=4cm, align=center}
+                   , l3/.style ={rect crayon fill={   Orange!80, line width=1.5mm}}
+                   , l2/.style ={rect crayon fill={LightBlue!60, line width=1.5mm}}
+                   , l1/.style ={rect crayon fill={LightBlue!40, line width=1.5mm}}
+                   ]
+
+\newcommand{\tooldesc}[2]{\large\textbf{#1}\\\small #2}
+
+  \node[l1] (flite) {\tooldesc{flite}{Compiler for a lazy functional\\language $\rightarrow$ templates}};
+  \node[l1, right=of flite] (emu) {\tooldesc{emu}{A ``fast'' C-based evaluator for \textbf{flite}}};
+  \node[l2, below=of emu] (verilator) {\tooldesc{heron-verilated}{A faster, cycle-accurate simulation using verilator}};
+  \node[l2, left=of verilator] (clash) {\tooldesc{heron-clash}{Hardware description of\\ Heron/Siege (written in Clash)}};
+  \node[l3, below=of verilator] (u280) {\tooldesc{heron-alveo-u280}{Heron/Siege built for Alveo U280 (VIO only)}};
+  \node[l3, left=of u280] (u55) {\tooldesc{heron-alveo-u55c}{Heron/Siege built for Alveo U55 (XRT only)}};
+
+  \node[fit={(verilator)}, draw=black!60, decorate] {};
+  \node[fit={(verilator)}, draw=black!30, decorate] {};
+
+  \draw[decorate,->] (flite) -- (emu);
+  \draw[decorate,->] (flite) -- (clash);
+  \draw[decorate,->] (flite) -- (verilator);
+  \draw[decorate,->] (clash) -- (verilator);
+  \draw[decorate,->] (clash) -- (u55);
+  \draw[decorate,->] (clash) -- (u280);
+
+  \draw[decoration={brace,raise=8pt,amplitude=8pt}, align=right,decorate]
+    (flite.south west) -- node[left] {\emph{\textbf{Software only}}} (flite.north west);
+  \draw[decoration={brace,raise=8pt,amplitude=8pt},decorate]
+    (clash.south west) -- node[left] {\emph{\textbf{Hardware sim}}} (clash.north west);
+  \draw[decoration={brace,raise=8pt,amplitude=8pt},decorate]
+    (u55.south west) -- node[left] {\emph{\textbf{Hardware backends\\(Non-free)}}} (u55.north west);
+
+\end{tikzpicture}

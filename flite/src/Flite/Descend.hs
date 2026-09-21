@@ -1,8 +1,8 @@
 module Flite.Descend where
 
-import Control.Monad
-import Flite.Identity
-import Flite.Writer
+import           Control.Monad
+import           Flite.Identity
+import           Flite.Writer
 
 class Descend a where
   descendM :: Monad m => (a -> m a) -> a -> m a

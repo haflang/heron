@@ -49,6 +49,8 @@ data PSOut a p d
   , _tops   :: Vec (2^p) a -- ^ Top \( 2^p \) stack elements
   , _snoops :: Vec (2^p) a -- ^ Top \( 2^p \) stack elements
   } deriving (Show, Generic, NFDataX, ShowX)
+deriving instance (KnownNat p, KnownNat d, BitPack a, 1<=d)
+  => BitPack (PSOut a p d)
 
 -- | Return just the top atom from the stack
 top :: BitPack a => PSOut a p d -> a
@@ -58,7 +60,9 @@ instance SizedRead (PSOut a p d) where
   type SizedAddr (PSOut a p d) = PSAddr d
   type SizedData (PSOut a p d) = Vec (2^p) a
   size (PSOut sz _ _ _) = sz
+  {-# INLINE size #-}
   read (PSOut _  _ x _) = x
+  {-# INLINE read #-}
 
 -- | A parallel stack contains elements of type @a@,
 --   with simultaneous access to the top @p@ elements,
@@ -89,13 +93,13 @@ newParStack ins snoopAddr = PSOut <$> fmap bitCoerce sp <*> fmap bitCoerce sp' <
     offsetExt = resize <$> offset :: Signal dom (Signed (1+CLog 2 d))
 
     -- Stack size tracking
-    sp  = delay (0 :: Unsigned (CLog 2 d)) sp'
+    sp  = register (0 :: Unsigned (CLog 2 d)) sp'
     sp' = wrapAddr @d $ bitCoerce . resize <$> offsetExt + (bitCoerce . resize <$> sp)
 
     -- Rotation required for top block (inspect LSBs)
-    rotVal = delay 0 rotVal'
+    rotVal = register 0 rotVal'
     rotVal' = resize <$> sp' :: Signal dom (Unsigned p)
-    snoopRotVal = delay 0 snoopRotVal'
+    snoopRotVal = register 0 snoopRotVal'
     snoopRotVal' = resize . bitCoerce <$> 1 + snoopAddr :: Signal dom (Unsigned p)
 
 
@@ -191,7 +195,7 @@ newCachedParStack ins snoopAddr = PSOut <$> sp <*> sp' <*> out <*> fmap _snoops 
                              (iterateI (+1) 0)
     pushMask = map (fmap isJust) pushes
 
-    cache :: Vec (2^p) (Signal dom a) = map (delay (unpack 0)) cache'
+    cache :: Vec (2^p) (Signal dom a) = map (register (unpack 0)) cache'
     cache' = zipWith5 (liftA5 choose) pushMask popMask rotated ramTops (map (fmap fromJust) pushes)
 
     out = bundle cache

@@ -1,0 +1,13 @@
+inits xs =
+  case xs of
+    []       -> [[]]
+    (y : ys) -> xs : inits (init xs)
+
+tails [] = []
+tails (x : xs) = (x : xs) : tails xs
+
+segments xs = concatMap tails (inits xs)
+
+mss xs = maximum (map sum (segments xs))
+
+main = mss (enumFromTo 0 40)

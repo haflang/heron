@@ -58,7 +58,8 @@ valid x y z =
   (length x == length z) &&
   (isSingleton $ solutions x y z (0, []))
 
-sumMap f xs = sumMapAcc f xs 0
+add x y = x+y
+sumMap f xs = foldl add 0 $ map f xs -- sumMapAcc f xs 0
 
 sumMapAcc f [] acc = acc
 sumMapAcc f (x : xs) acc = sumMapAcc f xs (f x + acc)

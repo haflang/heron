@@ -1,0 +1,7 @@
+cradle:
+  cabal:
+    - path: "src"
+      component: "lib:flite"
+
+    - path: "./bin/fl-parsec.hs"
+      component: "flite:exe:flite"

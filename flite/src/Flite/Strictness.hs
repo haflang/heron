@@ -1,14 +1,20 @@
+{-# LANGUAGE TupleSections #-}
 module Flite.Strictness
   ( Strictness           -- type Strictness = [(Id, [Bool])]
   , strictnessAnalysis   -- :: Prog -> Strictness
+  , annotateStrictArgs
   ) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.Dependency
+import           Flite.Dependency
+import           Flite.Descend
+import           Flite.Syntax
+import           Flite.Traversals
+import           Data.List
+import           Data.Maybe
+import Debug.Trace
 
 -- Strictness of each function in each argument
+-- TODO [(FId, [(Arg/LetId, Bool)])]?
 type Strictness = [(Id, [Bool])]
 
 -- Bottom and top of the abstract domain
@@ -38,16 +44,20 @@ abstr (Var v) = Var v
 abstr (Fun f) = Fun f
 abstr (Int n) = mayTerminate
 abstr (Con c) = mayTerminate
+abstr (Ctr {}) = mayTerminate
 abstr (App (Con c) es) = mayTerminate
+-- TODO Do I need to handle explicit `seq` and `par` differently here?
+-- Yes, we really need to mark seq arg as strict!
 abstr (App (Fun f) [e0, e1])
   | isPrimId f = conj (abstr e0) (abstr e1)
+abstr (Case e alts)           = conj (abstr e) (abstrAlts alts)
 abstr (App e es) = App (abstr e) (map abstr es)
-abstr (Case e alts) = conj e (abstrAlts alts)
 abstr (Let bs e) = Let [(v, abstr e) | (v, e) <- bs] (abstr e)
+abstr e = error $ "Abstraction for strictness error: " ++ show e
 
 abstrAlts :: [Alt] -> Exp
 abstrAlts alts = disjList (map abstr es)
-  where es = [ substMany e (zip (repeat mayTerminate) (patVars p))
+  where es = [ substMany e $ map (mayTerminate,) $ patVars p
              | (p, e) <- alts ]
 
 -- Evaluate an abstract expression
@@ -56,20 +66,38 @@ eval p (Int i) = Int i
 eval p (Fun f) = apply p f []
 eval p (Var v) = Var v
 eval p (App (Fun "&") [e0, e1]) =
-  case eval' p e0 of { Int 0 -> Int 0 ; Int 1 -> eval p e1 ; Var v -> Var v }
+  case eval' p e0 of
+    Int 0 -> Int 0
+    Int 1 -> eval p e1
+    Var v -> Var v
+    e     -> error $ "Strictness (&) eval failed on " ++ show e
 eval p (App (Fun "|") [e0, e1]) =
-  case eval' p e0 of { Int 0 -> eval p e1 ; Int 1 -> Int 1 ; Var v -> Var v }
+  case eval' p e0 of
+    Int 0 -> eval p e1
+    Int 1 -> Int 1
+    Var v -> Var v
+    e     -> error $ "Strictness (|) eval failed on " ++ show e
 eval p (App (Fun "=") [e0, e1]) =
-  case eval' p e0 of { Int 0 -> inv (eval' p e1)
-                     ; Int 1 -> eval' p e1
-                     ; Var v -> Var v }
+  case eval' p e0 of
+    Int 0 -> inv (eval' p e1)
+    Int 1 -> eval' p e1
+    Var v -> Var v
+    e     -> error $ "Strictness (=) eval failed on " ++ show e
+    -- ^ Not sure I understand the Var v cases. Why don't we need to look at e1?
 eval p (App e es) =
   case eval p e of
-    Var v -> Var v
-    Int i -> Int i
-    Fun f -> apply p f es
+    Var v            -> Var v
+    Int i            -> Int i
+    Fun f            -> apply p f es
     App (Fun f) args -> apply p f (es ++ args)
+eval p e = error $ "Missing patterns in strictness eval " ++ show e
 
+-- TODO We should also include let bound names and case patterns in `p`
+-- (assuming they're all unique)
+
+-- TODO We should probably have a different expression type for abstract exprs
+
+-- Eval wrapper that marks subexpressions as terminating
 eval' :: Strictness -> Exp -> Exp
 eval' p e = case eval p e of { App e es -> mayTerminate ; e -> e }
 
@@ -77,21 +105,26 @@ inv :: Exp -> Exp
 inv (Var v) = Var v
 inv (Int 1) = Int 0
 inv (Int 0) = Int 1
+inv e       = e
 
 apply :: Strictness -> Id -> [Exp] -> Exp
 apply prog f xs
   | length xs < length params = App (Fun f) xs
   | otherwise = eval prog (conjList [x | (True, x) <- zip params xs])
   where
-    params = head [ps | (g, ps) <- prog, g == f]
+    params = case [ps | (g, ps) <- prog, g == f] of
+      [] -> error $ "Strict apply failed on " ++ show f
+      (x:_) -> x
+-- TODO I think the above needs to handle partial application (for arguments to
+-- higher-order functions)
 
--- Inline let expressions in an abstract expression.  Looses sharing,
+-- Inline let expressions in an abstract expression.  Loses sharing,
 -- and assumes that all cyclic let bindings terminate.
 inlineLet :: Exp -> Exp
 inlineLet (Let [] e) = inlineLet e
 inlineLet (Let [(v, rhs)] e)
   | v `elem` freeVars rhs = inlineLet (subst mayTerminate v e)
-  | otherwise = inlineLet (subst rhs v e)
+  | otherwise = inlineLet (subst rhs v e) -- TODO In this case, we might want to keep the Let (apply only has to deal with single, non rec let-bindings)
 inlineLet (Let bs e) = inlineLet (substMany e s)
   where s = [(mayTerminate, v) | (v, e) <- bs]
 inlineLet e = descend inlineLet e
@@ -110,7 +143,7 @@ unrollExp ds (Fun f) =
   case lookupFuncs f ds of
     Func f [] rhs:_ -> rhs
     Func f es rhs:_ -> mayTerminate
-    _ -> Fun f
+    _               -> Fun f
 unrollExp ds (App (Fun f) es) =
     case lookupFuncs f ds of
       Func f args rhs:_
@@ -136,11 +169,11 @@ bottomiseExp :: [Decl] -> Exp -> Exp
 bottomiseExp ds (Fun f) =
   case lookupFuncs f ds of
     Func f es rhs:_ -> bottom
-    _ -> Fun f
+    _               -> Fun f
 bottomiseExp ds (App (Fun f) es) =
     case lookupFuncs f ds of
       Func f args rhs:_ -> bottom
-      _ -> mkApp (Fun f) es'
+      _                 -> mkApp (Fun f) es'
  where es' = map (bottomiseExp ds) es
 bottomiseExp ds e = descend (bottomiseExp ds) e
 
@@ -213,3 +246,38 @@ strictnessAnalysis =
   . onExp inlineLet
   . onExp splitLet
   . onExp abstr
+
+annotateStrictArgs :: Strictness -> Prog -> Prog
+annotateStrictArgs s = map ann
+  where
+    ann (Func f args rhs) = Func f args' rhs'
+      where
+        argAnns = fromJust $ lookup f s
+        args' = zipWith rename argAnns args
+        rename True (Var ('!':v)) = Var $ '!':v -- Don't double rename if analysis is run twice
+        rename True (Var v) = Var $ '!':v
+        rename _    a       = a
+        rhs'  = substMany rhs $
+                  zipWith (curry (\(b,Var a)-> (rename b (Var a), a)))
+                    argAnns
+                    args
+
+{-
+I've got to reverse engineer this a bit. The immediate issue is that functions
+lifted out by case elimination don't get any strictness evaluation. It'd also be
+nice to have the option of annotating let-bound variables.
+
+Once I can map what's here to the SPJ book, think about how to do annotation
+more fully.
+
+Alternatively, we can do case elimination in two passes?
+First lifts alts to SCs and second does case -> case tables
+
+
+We need to support HO functions a bit better:
+  * Might need to inline partially applied functions?
+  * Make sure strictness analysis works for them
+
+To work with let-bound, shared expressions, I think we might need to track an
+environment in abstract, or at least apply.
+-}

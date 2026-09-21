@@ -1,14 +1,14 @@
+Cabal-Version:      2.4
 Name:               flite
 Version:            0.6.2
 Synopsis:           f-lite compiler and interpreter
-License:            BSD3
+License:            BSD-3-Clause
 License-file:       LICENSE
 Author:             Matthew Naylor
 Maintainer:         Jason Reich <jason@cs.york.ac.uk>, Matthew Naylor <mfn@cs.york.ac.uk>
 Stability:          provisional
 Homepage:           http://mn416.github.io/reduceron-project/
 Build-Type:         Simple
-Cabal-Version:      >=1.8
 Description:        The f-lite language is a subset of Haskell 98 and Clean consisting of function
                     definitions, pattern matching, limited let expressions, function applications and
                     constructor applications expressed in the explicit 'braces' layout-insensitive format.
@@ -20,8 +20,17 @@ Description:        The f-lite language is a subset of Haskell 98 and Clean cons
                     See README for more information. Example flite programs included in source distribution.
 Category:           Compiler
 Extra-Source-Files: README examples/small/*.fl examples/large/*.fl
+data-files: data/Prelude.fl
+
+common common-options
+  default-extensions:
+    TupleSections
+  ghc-options:
+    -Wall -Wcompat
+    -O2
 
 library
+  import: common-options
   hs-source-dirs: src
   exposed-modules: Flite.Syntax
                    Flite.TemplateSyntax
@@ -30,11 +39,11 @@ library
                    Flite.Parse
                    Flite.Flite
                    Flite.Pretty
-                   Flite.PrettyHaskell
   Other-Modules: Flite.CallGraph
                  Flite.Case
                  Flite.CommonSubExpr
                  Flite.ConcatApp
+                 Flite.Defunctionalise
                  Flite.Dependency
                  Flite.Descend
                  Flite.Flatten
@@ -47,7 +56,6 @@ library
                  Flite.Let
                  Flite.Matching
                  Flite.Predex
-                 Flite.Prelude
                  Flite.State
                  Flite.Strictify
                  Flite.Strictness
@@ -56,7 +64,6 @@ library
                  Flite.Writer
                  Flite.WriterState
                  Paths_flite
-
   Build-Depends: base >= 3 && < 5,
                  array >= 0 && < 1,
                  containers >= 0 && < 1,
@@ -65,6 +72,7 @@ library
                  mtl
 
 Executable flite
-    Main-is:       bin/fl-parsec.hs
-    Build-Depends: flite == 0.6.2,
-                   base
+  import: common-options
+  Main-is:       bin/fl-parsec.hs
+  Build-Depends: flite == 0.6.2,
+                 base

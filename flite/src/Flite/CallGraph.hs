@@ -1,9 +1,9 @@
 module Flite.CallGraph (CallGraph, callReachableGraph, reachable) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Data.List
-import Flite.Dependency (DepGraph, closure, depends)
+import           Data.List
+import           Flite.Dependency (DepGraph, closure, depends)
+import           Flite.Syntax
+import           Flite.Traversals
 
 type CallGraph = DepGraph
 

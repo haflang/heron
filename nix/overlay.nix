@@ -23,10 +23,10 @@ final: prev:
           retroclash-lib =
             let
               unmodified =  prev.fetchFromGitHub {
-                owner = "cramsay";
+                owner = "gergoerdi";
                 repo = "retroclash-lib";
-                rev = "da7d41c72b4df4776747fa3fe5245a4ad230df1a";
-                sha256 = "sha256-uElqH8i5CNDKVfc6cHhM3qyqQLOHsLbTQpCjsBkoxHc=";
+                rev = "d071810e05862ff0e5a79014997d77d9862244b7";
+                sha256 = "sha256-qDLJ1GiQNxoQ7XzjzhGgeRr5N0nkTxTgEVlFM5UFxQM=";
               };
             in doJailbreak (dontCheck (hprev.callCabal2nix "retroclash-lib" unmodified {}));
 
@@ -81,15 +81,13 @@ final: prev:
 
               # Generate verilog netlist during build
               postBuild = (old.postBuild or "") + ''
-                dist/build/heron/heron --clash --verilog Heron.Board -fclash-aggressive-x-optimization                          -package-db dist/package.conf.inplace -fclash-inline-limit=300 -fclash-hdldir ./verilog
-                dist/build/heron/heron --clash --verilog Heron.Board -fclash-aggressive-x-optimization -fclash-force-undefined0 -package-db dist/package.conf.inplace -fclash-inline-limit=300 -fclash-hdldir ./verilog_no_x
+                dist/build/heron/heron --clash -g --verilog Heron.Board -fclash-aggressive-x-optimization -fclash-force-undefined0 -package-db dist/package.conf.inplace -fclash-inline-limit=1000 -fclash-spec-limit=100 -fclash-hdldir ./verilog
               '';
     
               # Copy verilog netlist to install folder
               postInstall = (old.postInstall or "") + ''
                 mkdir -p "$out/share"
                 cp -r "verilog/" "$out/share/verilog"
-                cp -r "verilog_no_x/" "$out/share/verilog_no_x"
               '';
             }));
 
@@ -167,15 +165,20 @@ final: prev:
             };
 
           # Vivado build for Ultra96 board (with PYNQ wrapper for prototyping)
-          heron-ultra96 =
-            prev.stdenv.mkDerivation {
+          heron-ultra96 = prev.stdenv.mkDerivation {
+
+              broken = true;
+              # Vivado segfaults on synthesis after forcing 'x'
+              # values to '0'. Since this target requires an IPI block design, it
+              # will remain broken until we find a workaround for the segfault....
+
               name = "heron-ultra96";
-              src = ../vivado;
+              src  = ../vivado;
               buildInputs = [ hfinal.heron-clash prev.which hfinal.vivado ];
               doCheck = false;
             
               buildPhase = ''
-                export HERON_VERILOG=${hfinal.heron-clash.outPath}/share/verilog_no_x/
+                export HERON_VERILOG=${hfinal.heron-clash.outPath}/share/verilog/
                 ( cd ./ultra96_pynq; vivado -mode batch -source synth.tcl )
               '';
             
@@ -193,7 +196,44 @@ final: prev:
                 cp ./ultra96_pynq/post_route_timing.rpt $out/share/heron/;
               '';
             };
-    
+
+          # Vivado build for PYNQ-Z2 board (using VIO for programmatic control over JTAG)
+          heron-pynqz2-vio =
+            prev.stdenv.mkDerivation {
+              name = "heron-pynqz2-vio";
+              src = ../vivado;
+              buildInputs = [ hfinal.heron-clash prev.which hfinal.vivado ];
+              doCheck = false;
+
+              buildPhase = ''
+                export HERON_VERILOG=${hfinal.heron-clash.outPath}/share/verilog/
+                ( cd ./pynqz2_vio; vivado -mode batch -source synth.tcl )
+              '';
+
+              checkPhase = ''
+                ( cd ./sim; vivado -mode batch -source sim.tcl )
+              '';
+
+              installPhase = ''
+                mkdir -p $out/share/heron/;
+                mkdir -p $out/bin/;
+                cp ./pynqz2_vio/heron_pynqz2_vio.bit  $out/share/heron/;
+                cp ./pynqz2_vio/heron_pynqz2_vio.ltx  $out/share/heron/;
+                cp ./pynqz2_vio/post_route_prj.zip    $out/share/heron/;
+                cp ./pynqz2_vio/post_route_util.rpt   $out/share/heron/;
+                cp ./pynqz2_vio/post_route_timing.rpt $out/share/heron/;
+                cp ./pynqz2_vio/run_vio*              $out/share/heron/;
+                ln -s $out/share/heron/run_vio $out/bin/run_vio;
+                cat > $out/bin/run_vio <<'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+cd ../share/heron/
+./run_vio.sh "$@"
+EOF
+                chmod +x $out/bin/run_vio;
+              '';
+            };
+
         };
     in
     prev."clashPackages-${ghcVersion}".extend hOverlay;

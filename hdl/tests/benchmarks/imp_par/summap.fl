@@ -1,0 +1,18 @@
+
+{-
+sumMap f xs = sumMapAcc f xs 0
+
+sumMapAcc f [] acc = acc
+sumMapAcc f (x : xs) acc = sumMapAcc f xs (f x + acc)
+-}
+
+myfoldl f a [] = a
+myfoldl f a (x : xs) = myfoldl f (f a x) xs
+
+myfoldr f z []       = z
+myfoldr f z (x : xs) = f x (myfoldr f z xs)
+
+add x y = x + y
+
+mysum xs = myfoldr add 0 xs
+main = mysum (enumFromTo 1 50)

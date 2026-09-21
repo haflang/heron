@@ -1,0 +1,123 @@
+\begin{tikzpicture}[
+    penciline={jag ratio=1}
+  , every node/.style={minimum width=1.3cm, minimum height=3em, inner sep=1pt}
+  , node distance = 0.35cm
+  , every text node part/.style={align=center}
+  , every path/.style={thick}
+  , state/.style={inner sep=0.3em}
+  , tallstate/.style={state, minimum height=11.5em}
+  , midstate/.style={state, minimum height=5.1em}
+  , wide/.style={minimum width=2cm}
+  , pelbl/.style={minimum height=0, anchor=north}
+  , tmp/.style={->,draw=black!50}
+  , trans/.style={->,draw=black,thick}
+  , buf/.style={decorate,->,draw=Blue,thick}
+  , block/.style={decorate,->,draw=Orange,thick}
+  , pulse/.style={decorate,->,draw=green,thick}
+  , smallmem/.style={font=\footnotesize,minimum height=1em}
+  , fsm/.style={rect crayon fill={Orange!80, opacity=0.9, line width=1.2mm}}
+  , pe/.style={decorate, draw=black!60, rectangle, rect crayon fill={LightBlue!30, opacity=0.9, line width=4.5mm}, minimum height=2.4cm, minimum width=1.4cm}
+  , peHollow/.style={decorate, draw=black!60, rectangle, minimum height=2.4cm, minimum width=1.4cm}
+  , mem/.style={rect crayon fill={Purple!80, opacity=0.9, line width=1.5mm}}
+  ]
+
+  % States
+
+  \node[state,fsm] (rc) {RC};
+  \node[state,mem, above =0.6cm of rc] (rc_mem) {RC\\RAM};
+  \node[state,fsm, below left  =of rc] (put) {Put};
+  \node[state,fsm, below right =of put] (fetch) {Fetch};
+  \node[state,fsm, below left  =of fetch] (fish) {Fish};
+  \node[state,fsm, below right =of fish] (thread) {Thread};
+  \node[state,fsm, below left  =of thread] (context) {Context};
+  \node[state,mem, below =1cm of thread] (thread_mem) {Thread\\RAM};
+  \node[state,fsm] (lr) at ($(rc)-(3.7cm,-0.8cm)$) {Local\\Read};
+  \node[state,fsm] (lw) at ($(lr)-(1.0cm,-1.5cm)$) {Local\\Write};
+  \node[state,fsm, below left=1cm of context] (rr) {Remote\\Read};
+  \node[state,fsm] (rw) at ($(rr)-(1.0cm,-1.15cm)$) {Remote\\Write};
+  \node[state,peHollow,dashed,minimum height=6cm,thick,fill=black!10] (intercon) at ($(lw)!0.5!(rr)$) {\rotatebox{90}{Interconnect}};
+
+  % PE groupings
+  \begin{pgfonlayer}{background}
+    \node [peHollow, fit={(rw) (rr) (lw) (thread)}, inner sep=0.2cm,yshift=-0.3em] (com) {};
+    \node [peHollow, fit={(rw) (rr) (lw) (thread)}, inner sep=0.2cm,yshift=-0.3em, draw=black!30] {};
+    \node [below = 0em of com, pelbl] {\large Com};
+  \end{pgfonlayer}
+
+  \node[state, pe, anchor=north west] (mut) at ($(com.north east)+(1.0cm,0)$) {Mutator};
+  \node[state, pe, anchor=south west] (gc)  at ($(com.south east)+(1.0cm,0)$) {GC};
+  \node[state, peHollow, draw=black!30, anchor=north west] at ($(com.north east)+(1.0cm,0)$) {};
+  \node[state, peHollow, draw=black!30, anchor=south west] at ($(com.south east)+(1.0cm,0)$) {};
+  \node[tallstate,mem] (heap) at ($(mut.south)!0.5!(gc.north)$) {Heap};
+  \node[state,mem, below =of gc] (gc_mem) {GC\\RAM};
+  \node[anchor=south,inner sep=0] (other_pes) at (rr.west|-gc_mem.south) {\emph{Neighbour PEs}};
+
+  % Main com interfaces
+  \draw[buf] (fish)    to[bend left=20] (fetch);
+  \draw[buf] (fetch)   to[bend left=20] (fish);
+  \draw[buf] (fetch)   to               (rc);
+  \draw[buf] (fetch)   to               (thread);
+  \draw[buf] (fish)    to               (thread);
+  \draw[buf] (context) to               (thread);
+
+  % Mut to com
+  \draw[block] (mut.west|-lr.east) to (lr.east);
+  \draw[buf] ([yshift=0.5em]mut.west|-lr.east) to ([yshift=0.5em]lr.east);
+  \draw[block] (lw.east) to (mut.west|-lw.east);
+
+  % Mut to heap
+  \draw[pulse,->] ([xshift=0.3em]mut.south) to ([xshift=0.3em]heap.north);
+  \draw[pulse,->] ([xshift=-0.3em]mut.south) to ([xshift=-0.3em]heap.north);
+
+  % Com memories
+  \draw[pulse,->] ([xshift=0.3em]rc.north) to ([xshift=0.3em]rc_mem.south);
+  \draw[pulse,->] ([xshift=-0.3em]rc.north) to ([xshift=-0.3em]rc_mem.south);
+  \draw[pulse,->] ([xshift=0.3em]thread.south) to ([xshift=0.3em]thread_mem.north);
+  \draw[pulse,->] ([xshift=-0.3em]thread.south) to ([xshift=-0.3em]thread_mem.north);
+
+  % GC to heap
+  \draw[block,->] (gc.north) to (heap.south);
+  \draw[pulse,->] ([xshift=0.3em]gc.south) to ([xshift=0.3em]gc_mem.north);
+  \draw[pulse,->] ([xshift=-0.3em]gc.south) to ([xshift=-0.3em]gc_mem.north);
+
+  % Fetch to heap
+  \draw[block,->] ([yshift=-0.5em]fetch.east) to ([yshift=-0.5em]heap.west|-fetch.east);
+
+  % Context to heap
+  \draw[block,-*] (context.east) to ([xshift=0.3em]gc.north|-context.east);
+
+  % Gc and Mut symbiosis
+  \coordinate (farmut) at ($(mut)+(1.0cm,0)$);
+  \draw[buf,->] (mut.east) to ([xshift=0.5em]farmut|-mut.east) |- (gc.east);
+
+  % Mut to backdoors
+  \coordinate (nearmut) at ($(mut)-(1.5cm,0)$);
+  \draw[pulse,->] (mut.west) to (nearmut|-mut.west) |- ([yshift=-0.5em]gc.west);
+  \draw[pulse,*->] ([xshift=0.3em]nearmut|-thread.east) to (thread.east);
+  \draw[pulse,*->] ([xshift=0.3em]nearmut|-fetch.east) to (fetch.east);
+
+  % Gc to backdoors
+  \coordinate (neargc) at ($(gc)-(1.2cm,0)$);
+  \coordinate (neargc2) at ($(gc)-(0.9cm,0)$);
+  \draw[block,-] (gc.west) -| ([yshift=-0.3em]neargc|-rc.west);
+  \draw[block,*->] ([xshift=0.3em,yshift=-0.5em]neargc|-rc.east) to ([yshift=-0.5em]rc.east);
+  \draw[block,*->] ([xshift=0.3em,yshift=-0.5em]neargc|-thread.east) to ([yshift=-0.5em]thread.east);
+  \draw[buf,-] ([yshift=0.5em]fetch.east) to ([yshift=0.5em]neargc2|-fetch.east);
+  \draw[buf,->] ([yshift=0.5em]neargc2|-fetch.east) |- ([yshift=0.5em]gc.west);
+
+  % Intercon
+  \draw[buf,->] (lw.south|-intercon.north) to (lw.south);
+  \draw[buf,<-] (lr.south|-intercon.north) to (lr.south);
+  \draw[buf,->] (rw.north|-intercon.south) to (rw.north);
+  \draw[buf,<-] (rr.north|-intercon.south) to (rr.north);
+  \foreach \dst in {put,fetch,fish,thread}{
+    \draw[buf,<->] (intercon.east|-\dst.west) to (\dst.west);
+  }
+  \draw[buf,<->] ([yshift=-1em]intercon.east|-rc.west) to ([yshift=-1em]rc.west);
+  \draw[buf,<->] (context) to ($(intercon.south east)+(0,1em)$);
+
+  % PE ports
+  \draw[buf,->] (rw.south) to ([yshift=-0.5em]rw.south|-other_pes.north);
+  \draw[buf,<-] (rr.south) to ([yshift=-0.5em]rr.south|-other_pes.north);
+
+\end{tikzpicture}

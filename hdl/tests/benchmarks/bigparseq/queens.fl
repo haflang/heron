@@ -1,0 +1,32 @@
+-- nqueens :: Int -> Int
+nqueens nq = length (pargen nq 0 [])
+
+-- toOne :: Int -> [Int]
+toOne n = if n == 1
+  then [1]
+  else n : toOne (n - 1)
+
+-- safe :: Int -> Int -> [Int] -> Bool
+safe x d []    = True
+safe x d (q:l) = (x /= q) && (x /= q+d) && (x /= q-d) && safe x (d+1) l
+
+-- whenSafe :: [Int] -> Int -> [[Int]]
+whenSafe b q = if safe q 1 b
+                 then [q : b]
+                 else []
+
+-- gen :: Int -> [[Int]] -> [[Int]]
+gen nq bs = concatMap (genInner nq) bs
+
+-- genInner :: Int -> [Int] -> [[Int]]
+genInner nq b = concatMap (whenSafe b) (toOne nq)
+
+
+-- pargen :: Int -> Int -> [Int] -> [[Int]]
+pargen nq n b = iterate (gen nq) [b] !! (nq - n)
+
+iterate f x = x : iterate f (f x)
+
+threshold = 4
+
+main = nqueens 8

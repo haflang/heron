@@ -1,0 +1,27 @@
+inits xs =
+  case xs of
+    []       -> [[]]
+    (y : ys) -> xs : inits (init xs)
+
+tails ys =
+  case ys of
+    [] -> []
+    (x : xs) -> ys : tails xs
+
+segments xs = map tails (inits xs)
+
+minBound = 0-16383
+maxSum xs =
+  let segSums = map sum xs
+  in maximumGo minBound segSums
+
+mss xs =
+  let xss = segments xs -- `using` evalList r0
+      -- Evaluating the segments spine isn't necessary, but it
+      -- does avoid some nasty suspend/resumes in parallel evaluation
+      sums = map maxSum xss -- `using` parList rseq
+  in maximum sums
+
+main = let n = 90
+           xs = enumFromTo (0-n) n -- `using` evalList rseq
+       in mss xs

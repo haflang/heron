@@ -1,18 +1,19 @@
 module Flite.Let(inlineLinearLet, inlineSimpleLet, liftLet) where
 
-import Flite.Dependency
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Descend
-import Flite.Fresh
-import Data.List
+import           Data.Functor     ((<&>))
+import           Data.List
+import           Flite.Dependency
+import           Flite.Descend
+import           Flite.Fresh
+import           Flite.Syntax
+import           Flite.Traversals
 
 mkLet :: [Binding] -> Exp -> Exp
 mkLet [] e = e
 mkLet bs e = Let bs e
 
 inlineLetWhen :: ([Binding] -> Exp -> Binding -> Bool) -> Prog -> Fresh Prog
-inlineLetWhen f p = onExpM freshen p >>= return . onExp inline
+inlineLetWhen f p = onExpM freshen p <&> onExp inline
   where
     inline (Let bs e) = mkLet (zip vs1 (map inline es1')) (inline e')
       where (vs, es) = unzip bs
@@ -32,21 +33,21 @@ inlineLinearLet = inlineLetWhen linear
         where
             nrefs = refs v (e:map snd bs)
             isSubject (Case (Var v') _) = v == v'
-            isSubject _ = False
+            isSubject _                 = False
     refs v es = sum (map (varRefs v) es)
-    isPrs (Fun f) = isPrimId f
+    isPrs (Fun f)   = isPrimId f
     isPrs (App e _) = isPrs e
-    isPrs _ = False
+    isPrs _         = False
 
 inlineSimpleLet :: Prog -> Fresh Prog
 inlineSimpleLet = inlineLetWhen simple
   where
     simple _ _ (_, rhs) = simp rhs
-    simp (App e []) = simp e
-    simp (App e es) = False
+    simp (App e [])  = simp e
+    simp (App e es)  = False
     simp (Case e as) = False
-    simp (Fun f) = not (isPrimId f)
-    simp _ = True
+    simp (Fun f)     = not (isPrimId f)
+    simp _           = True
 
 liftLet :: Prog -> Fresh Prog
 liftLet p = do p' <- onExpM freshen p
@@ -56,11 +57,11 @@ liftLet p = do p' <- onExpM freshen p
                    (liftInCase (dropBinds e))
 
     liftInCase (Case e as) = Case e [(p, lift e) | (p, e) <- as]
-    liftInCase e = descend liftInCase e
+    liftInCase e           = descend liftInCase e
 
-    dropBinds (Let bs e) = dropBinds e
+    dropBinds (Let bs e)  = dropBinds e
     dropBinds (Case e as) = Case (dropBinds e) as
-    dropBinds e = descend dropBinds e
+    dropBinds e           = descend dropBinds e
 
     binds (Let bs e) = binds e ++ [(v, dropBinds e) | (v, e) <- bs]
                                ++ concatMap (binds . snd) bs

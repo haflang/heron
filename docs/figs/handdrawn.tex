@@ -1,0 +1,175 @@
+\usetikzlibrary{patterns,patterns.meta,fadings}
+\usetikzlibrary{graphs}
+\usetikzlibrary{hobby,backgrounds,calc,trees}
+\usetikzlibrary{shapes.misc}
+\usetikzlibrary{decorations.pathmorphing,calc,shadows.blur,shadings}
+
+% Font configuration
+\usepackage{fontspec}
+%\defaultfontfeatures{RawFeature={+axis={wght=100}}}
+\setsansfont{Caveat}
+\setmainfont{Caveat}
+\setmathrm{Caveat}
+\setmathsf{Caveat}
+\setmathtt{Caveat}
+
+% Pencil line styles
+
+\usepackage{ifthen}
+\usetikzlibrary{calc,patterns,decorations,plotmarks}
+\pgfdeclaredecoration{penciline}{initial}{
+  \state{initial}[width=+\pgfdecoratedinputsegmentremainingdistance, auto corner
+    on length=1pt, ]{ \ifthenelse {\pgfkeysvalueof{/tikz/penciline/jag ratio}=0}
+    { \pgfpathcurveto%
+              {% 1st control point
+                \pgfpoint
+                    {\pgfdecoratedinputsegmentremainingdistance/2}
+                    {2*rnd*\pgfdecorationsegmentamplitude}
+              }
+              {%% 2nd control point
+                \pgfpoint
+                %% Make sure random number is always between origin and target points
+                    {\pgfdecoratedinputsegmentremainingdistance/2}
+                    {2*rnd*\pgfdecorationsegmentamplitude}
+              }
+              {% 2nd point (1st one is implicit)
+                \pgfpointadd
+                    {\pgfpointdecoratedinputsegmentlast}
+                    {\pgfpoint{0*rand*1pt}{0*rand*1pt}}
+              }
+        } {
+          \pgfpathcurveto%
+              {% 1st control point
+                \pgfpoint
+                    {\pgfdecoratedinputsegmentremainingdistance*rnd*1pt}
+                    {\pgfkeysvalueof{/tikz/penciline/jag ratio}*
+                      rand*\pgfdecorationsegmentamplitude}
+              }
+              {%% 2nd control point
+                \pgfpoint
+                %% Make sure random number is always between origin and target points
+                    {(.5+0.25*rand)*\pgfdecoratedinputsegmentremainingdistance}
+                    {\pgfkeysvalueof{/tikz/penciline/jag ratio}*
+                      rand*\pgfdecorationsegmentamplitude}
+              }
+              {% 2nd point (1st one is implicit)
+                \pgfpointadd
+                    {\pgfpointdecoratedinputsegmentlast}
+                    {\pgfpoint{rand*1pt}{rand*1pt}}
+              }
+        }
+  }
+  \state{final}{}
+}
+
+\tikzset{
+  penciline/.code={\pgfqkeys{/tikz/penciline}{#1}},
+  penciline={
+    jag ratio/.initial=5,
+    decoration/.initial = penciline,
+  },
+  penciline/.style = {
+    decorate,
+    %%decoration={\pgfkeysvalueof{/tikz/penciline/decoration}},
+    penciline/.cd,
+    #1,
+    /tikz/.cd,
+  },
+  decorate,
+  decoration={\pgfkeysvalueof{/tikz/penciline/decoration}},
+}
+
+% Crayon fills
+
+\tikzset{
+  rect crayon fill/.style args = {#1}{
+    append after command={
+      \pgfextra
+      \draw[Pink,opacity=1.0,decorate,line width=0.9mm,line join=bevel,#1] (\tikzlastnode.north west)
+      \foreach \x[remember=\x as \lastx(initially 0)] in {0.1,0.2,...,1.0}{
+       -- ($(\tikzlastnode.north west)!\lastx!(\tikzlastnode.south west)$) --($(\tikzlastnode.north west)!\lastx+0.05!(\tikzlastnode.north east)$)
+      }
+      \foreach \x[remember=\x as \lastx(initially 0)] in {0.1,0.2,...,1}{
+       -- ($(\tikzlastnode.south west)!\lastx!(\tikzlastnode.south east)$) --($(\tikzlastnode.north east)!\lastx+0.05!(\tikzlastnode.south east)$)
+      };
+      \endpgfextra
+    }
+  }
+}
+
+\tikzset{
+  axis crayon fill/.style = { insert path = {
+      \pgfextra
+      \draw[LightBlue!40,opacity=1.0,decorate,line width=0.9mm,line join=bevel] (\tikzlastnode.north west)
+      \foreach \x[remember=\x as \lastx(initially 0)] in {0.1,0.2,...,1.0}{
+       -- ($(\tikzlastnode.north west)!\lastx!(\tikzlastnode.south west)$) --($(\tikzlastnode.north west)!\lastx+0.05!(\tikzlastnode.north east)$)
+      }
+      \foreach \x[remember=\x as \lastx(initially 0)] in {0.1,0.2,...,1}{
+       -- ($(\tikzlastnode.south west)!\lastx!(\tikzlastnode.south east)$) --($(\tikzlastnode.north east)!\lastx+0.05!(\tikzlastnode.south east)$)
+      };
+      \endpgfextra
+    }
+  }
+}
+
+\newcommand{\plotcrayonbg}{
+    \begin{pgfonlayer}{background}
+     \node[rect crayon fill={LightBlue!60, line width=2mm},fit={(current axis)}] {};
+    \end{pgfonlayer}
+}
+% This is the base for the fractal decoration. It takes a random point between the start and end, and
+% raises it a random amount, thus transforming a segment into two, connected at that raised point
+% This decoration can be applied again to each one of the resulting segments and so on, in a similar
+% way of a Koch snowflake.
+\pgfdeclaredecoration{irregular fractal line}{init}
+{
+  \state{init}[width=\pgfdecoratedinputsegmentremainingdistance]
+  {
+    \pgfpathlineto{\pgfpoint{random*\pgfdecoratedinputsegmentremainingdistance}{(random*\pgfdecorationsegmentamplitude-0.02)*\pgfdecoratedinputsegmentremainingdistance}}
+    \pgfpathlineto{\pgfpoint{\pgfdecoratedinputsegmentremainingdistance}{0pt}}
+  }
+}
+
+
+% define some styles
+\tikzset{
+   paper/.style={draw=Orange!60,
+                 fill=Orange!60,
+                 % blur shadow,
+                 % lower left=black!20, upper left=black!15, upper right=white, lower right=black!10
+                 },
+   irregular border/.style={decoration={irregular fractal line, amplitude=0.2},
+           decorate,
+     },
+   ragged border/.style={ decoration={random steps, segment length=7mm, amplitude=2mm},
+           decorate,
+   }
+}
+
+% Macro to draw the shape behind the text, when it fits completly in the
+% page
+\def\tornpaper#1{
+\tikz{
+  \node[inner sep=1em] (A) {#1};  % Draw the text of the node
+  \begin{pgfonlayer}{background}  % Draw the shape behind
+  \fill[paper] % recursively decorate the bottom border
+        decorate[irregular border]{decorate{decorate{decorate{decorate[ragged border]{
+        ($(A.south east) $) -- ($(A.south west)$)
+        -- (A.north west) -- (A.north east) -- cycle
+        }}}}};
+  \end{pgfonlayer}}
+}
+
+\tikzset{
+  ripped lit/.style args = {#1}{
+    append after command={
+      \pgfextra
+      \fill[paper,#1] % recursively decorate the bottom border
+            decorate[irregular border]{decorate{decorate{decorate{decorate[ragged border]{
+            ($(\tikzlastnode.south east) $) -- ($(\tikzlastnode.south west)$)
+            -- (\tikzlastnode.north west) -- (\tikzlastnode.north east) -- cycle
+            }}}}};
+      \endpgfextra
+    }
+  }
+}

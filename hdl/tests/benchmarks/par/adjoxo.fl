@@ -1,0 +1,137 @@
+{-
+This is a tricky one!
+
+We have unpredictably sized tasks in the solver (depending on game state), so we
+really need some sort of task context switching to keep both busy.
+
+Worse still is that the main solver uses short circuiting via foldr1 with a
+function lazy in its second argument (bestOf). If we chose to spark all the
+possible moves, there's a good chance that we will be doing speculative
+parallism, and probably wasting time!
+
+-}
+
+data Outcome =
+    Draw
+  | Loss
+  | Win
+
+data Player =
+    O
+  | X
+
+insert x [] = x : []
+insert x (y : ys) =
+  if x <= y
+    then x : y : ys
+    else y : insert x ys
+
+bestOf Win  v = Win
+bestOf Loss v = v
+bestOf Draw Win = Win
+bestOf Draw Draw = Draw
+bestOf Draw Loss = Draw
+
+inverse Loss = Win
+inverse Draw = Draw
+inverse Win  = Loss
+
+cmp a b =
+  if a == b
+    then EQ
+    else
+      if a <= b
+        then LT
+        else GT
+
+diff [] ys = []
+diff (x : xs) [] = x : xs
+diff (x : xs) (y : ys) =
+  case cmp x y of
+    LT -> x : diff xs (y : ys)
+    EQ -> diff xs ys
+    GT -> diff (x : xs) ys
+
+subset xs ys = null (diff xs ys)
+
+hasLine p =
+  subset [1,2,3] p ||
+  subset [4,5,6] p ||
+  subset [7,8,9] p ||
+  subset [1,4,7] p ||
+  subset [2,5,8] p ||
+  subset [3,6,9] p ||
+  subset [1,5,9] p ||
+  subset [3,5,7] p
+
+gridFull ap pp = length ap + length pp == 9
+
+analysis ap pp =
+  if hasLine pp
+    then Loss
+    else
+      if gridFull ap pp
+        then Draw
+        else let options = map (moveval ap pp) (diff (diff (enumFromTo 1 9) ap) pp) `using` parBuffer 7 rseq
+             in foldr1 bestOf options
+
+moveval ap pp m = inverse (analysis pp (insert m ap))
+
+adjudicate os xs =
+  case (cmp (length os) (length xs)) of
+    GT -> report (analysis xs os) X
+    LT -> report (analysis os xs) O
+    EQ -> if hasLine xs
+            then report Win X
+            else if hasLine os
+                   then report Win O
+                   else report (analysis xs os) X
+
+report Loss s = side (opp s)
+report Win  s = side s
+report Draw p = 'D'
+
+opp O = X
+opp X = O
+
+side O = 'O'
+side X = 'X'
+
+main = adjudicate [1,3] [5]
+-- ^ Player 2 has one good first choice, so there's unevenly sized tasks. Gets only x1.39
+
+-- main = adjudicate [1,9] [7,3]
+-- ^ Gets x1.73 with parList, early choices on a symmetric board will be more evenly sized
+
+-- What do we need to do to get better performance here? What does GHC get?
+
+{-
+123
+456
+789
+-}
+
+-- As is, both cores are active for almost the whole time, but there's no real
+-- benefit? Updates issue or maybe reevaluation due to timing issue? Nah, issue
+-- could be that one core is just doing the forceLists for work that is already
+-- done! Try to refactor calls so that we can detect fizzled sparks better.
+-- That requires `par`ing on the list element, rather than the forceList call.
+
+-- OK, so I think the above is probably true of queens, but for this, the issue
+-- was that I wasn't reporting blocking accurately in the VCD traces. I'll fix
+-- this, and then the solution is allowing adding to the stack if we fetch a
+-- blackhole. If we do foldr, the main core is just traversing the list, waiting
+-- for the second core to evaluate its stuff.
+-- The fact that core 0 never does work until the end means that the first job
+-- is probably the largest.
+
+-- I've started taking new tasks on blocking... but why on earth is it still
+-- slower?! We're using both cores?! Could this be an issue of sharing? We spark
+-- things and they take much longer to evaluate because they are now shared? Can
+-- we avoid things being shared in a dual core environment, even if it breaks
+-- the GC?
+
+-- After loading sparks as unique pointers and disabling the immediate
+-- deallocation of unique pointers, the dual core system no longer performs 3k
+-- cycles slower --- it just does exactly the same. Let me revert some changes I
+-- made to parList and try again. Yep. Same thing. What's going on!?

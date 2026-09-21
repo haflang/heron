@@ -1,0 +1,105 @@
+\documentclass[10pt,tikz,convert={outfile=tooling.svg}]{article}
+
+% Colour scheme
+\usepackage{xcolor}
+\definecolor{Blue}{HTML}{0078AE}
+\definecolor{DarkBlue}{HTML}{002B5C}
+\definecolor{Gray}{HTML}{A7A9AC}
+\definecolor{Green}{HTML}{5D9732}
+\definecolor{LightBlue}{HTML}{ade4ff}
+\definecolor{Orange}{HTML}{F47B20}
+\definecolor{Pink}{HTML}{ea6b66}
+\definecolor{Purple}{HTML}{b174c2}
+\definecolor{Red}{HTML}{EE3224}
+
+% Misc packages
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{chronosys}
+\usepackage{enumitem}
+\usepackage{fancyvrb}
+\usepackage{graphicx}
+\usepackage{ifthen}
+\usepackage{listings}
+\usepackage{mathtools}
+\usepackage{siunitx}
+\usepackage{svg}
+\usepackage{transparent}
+\usepackage{xspace}
+\usepackage{currfile}
+\usepackage{etoolbox}
+
+% TikZ setup
+\usepackage{tikz}
+\usetikzlibrary{
+  , arrows
+  , backgrounds
+  , calc
+  , calligraphy
+  , decorations.pathreplacing
+  , external
+  , fadings
+  , fit
+  , graphdrawing
+  , graphs
+  , hobby
+  , math
+  , positioning
+  , shadows.blur
+  , shapes
+  , tikzmark
+  , trees
+  }
+
+% PGFPlots setup
+\usepackage{pgfplots}
+\usepgfplotslibrary{colorbrewer}
+\usepackage{pgfplotstable}
+\usepgfplotslibrary{groupplots,dateplot,groupplots,fillbetween}
+
+% Setup externalize
+\tikzexternalize[prefix=tikz/]
+\tikzsetfigurename{\currfilebase-}
+\newcommand*\setmyname{%\
+  \expandafter\tikzsetfigurename\expandafter{\currfilebase-}%
+}
+\AtBeginEnvironment{tikzpicture}{\setmyname}
+\usegdlibrary{trees, layered}
+
+\input{handdrawn}
+\usepackage{inconsolata}
+\tikzset{
+  invisible/.style={opacity=0},
+  visible on/.style={alt={#1{}{invisible}}},
+  alt/.code args={<#1>#2#3}{%
+    \alt<#1>{\pgfkeysalso{#2}}{\pgfkeysalso{#3}}
+  },
+}
+
+% PGF Plots setup
+\usepackage{pgfplots, pgfplotstable}
+\pgfplotsset{
+  compat=newest,
+  colormap={my colormap         }{color=(Purple) color=(LightBlue) color=(Pink)  },
+  colormap={my colormap reversed}{color=(Pink)   color=(LightBlue) color=(Purple)},
+}
+\usepgfplotslibrary{groupplots, colorbrewer, fillbetween}
+\pgfplotscreateplotcyclelist{blueorange}{%
+  solid , every mark/.append style={solid, fill=Blue}    , mark=*\\%
+  dashed, every mark/.append style={solid, fill=Orange}  , mark=diamond*\\%
+  dotted, every mark/.append style={solid, fill=black!40}, mark=triangle*\\%
+  dotted, every mark/.append style={solid, fill=red!80}  , mark=triangle*\\%
+}
+
+\newcommand{\statetype}[1]{\footnotesize{\emph{\color{Blue}(#1)}}}
+
+\begin{document}
+\pagecolor{white}
+
+\input{tex/mesh.tex}
+\input{tex/tooling.tex}
+\input{tex/mut_gc.tex}
+\input{tex/scheduler.tex}
+\input{tex/speedups.tex}
+
+\end{document}

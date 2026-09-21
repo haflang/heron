@@ -3,15 +3,16 @@ module Flite.IntInfer
   , intInfer      -- :: Prog -> Intness
   ) where
 
-import Flite.Syntax
-import Flite.Traversals
-import Flite.Dependency
+import           Data.Maybe       (fromMaybe)
+import           Flite.Dependency
+import           Flite.Syntax
+import           Flite.Traversals
 
 -- Defines for each function which arguments are primitive integers
 type Intness = [(Id, [Bool])]
 
 lookupIntness :: Intness -> Id -> [Bool]
-lookupIntness p f = case lookup f p of { Nothing -> [] ; Just bs -> bs }
+lookupIntness p f = fromMaybe [] (lookup f p)
 
 -- Is a given variable an integer in a given expression?
 isInt :: Intness -> Id -> Exp -> Bool
@@ -34,7 +35,7 @@ anyInt p mask v es = any (isVar v) es' || any (isInt p v) es
 
 isVar :: Id -> Exp -> Bool
 isVar v (Var w) = v == w
-isVar v e = False
+isVar v e       = False
 
 -- Perform integer inference on recursive groups
 infer :: [[Decl]] -> Intness

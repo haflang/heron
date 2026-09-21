@@ -1,0 +1,18 @@
+#
+# GTKWave filter for CPU Phase
+# Ensure this matches the Clash encoding!
+#
+# Dump the ADT encoding with something like:
+# Prelude.mapM_ (\p -> putStrLn $ Prelude.unwords [show (toInteger $ pack p), show p]) $ enumFrom (minBound :: Phase)
+#
+0 ?orange?Init
+1 ?orange?Starting
+2 ?green?Reduce
+3 Stall
+4 GCStall
+5 Halt
+6 DumpRoots
+7 ContinueUpdate
+8 ?red?Fetch
+9 ?blue?Suspend
+10 ?blue?Resume

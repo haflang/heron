@@ -1,12 +1,13 @@
+{-# LANGUAGE TupleSections #-}
 module Flite.State where
 
-import Control.Monad       (liftM, ap)
-import Control.Applicative (Applicative(..))
+import           Control.Applicative (Applicative (..))
+import           Control.Monad       (ap, liftM)
 
 newtype State s a = S { runState :: s -> (s, a) }
 
 instance Monad (State s) where
-  return a = S (\s -> (s, a))
+  return a = S (,a)
   m >>= f = S (\s -> case runState m s of
                        (s', a) -> runState (f a) s')
 

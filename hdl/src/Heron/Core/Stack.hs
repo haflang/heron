@@ -36,12 +36,16 @@ data SOut a d
   , _top    :: Maybe a   -- ^ Current top stack element
   , _newTop :: Maybe a   -- ^ New top stack element after pending operation
   } deriving (Show, Generic, NFDataX, ShowX)
+deriving instance (KnownNat d, BitPack a, 1<=d)
+  => BitPack (SOut a d)
 
 instance SizedRead (SOut a d) where
   type SizedAddr (SOut a d) = RamAddr d
   type SizedData (SOut a d) = Maybe a
   size (SOut sz _ _) = sz
+  {-# INLINE size #-}
   read (SOut _  x _) = x
+  {-# INLINE read #-}
 
 -- | A stack contains elements of type @a@ with a depth of @d@ elements and a
 --   pop-before-push semantics.
@@ -73,7 +77,7 @@ newStack ramPrim inps = SOut <$> sp <*> top <*> top'
         (False, True ) -> sz+1 -- Infer two parallel adders rather than two cascaded
         (True , False) -> sz-1
         (True , True ) -> sz
-    sp  = delay (0 :: RamAddr d) sp'
+    sp  = register (0 :: RamAddr d) sp'
     sp' = applyOffset <$> sp <*> pop <*> fmap isJust mpush
 
     -- Generate RAM inputs
@@ -92,4 +96,4 @@ newStack ramPrim inps = SOut <$> sp <*> top <*> top'
                  mpush
                  (mux pop ramOut top)
 
-    top = delay Nothing top'
+    top = register Nothing top'
